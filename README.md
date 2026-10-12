@@ -36,13 +36,14 @@ RUN go install github.com/DataDog/orchestrion@v1.12.1
 
 Use the versioned Release asset instead of cloning the Git repository. Install
 `curl` in the builder's existing package-install step, and insert the following
-before `orchestrion pin`. Copy the archive SHA256 from the verified Release's
-`SHA256SUMS` into the Dockerfile; the placeholder intentionally fails verification.
+before `orchestrion pin`. The defaults below identify the published
+[v0.1.0 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.1.0)
+and its archive SHA256. Review the Release and checksum before adoption.
 Both defaults live in the Dockerfile, so the build command needs no extra arguments.
 
 ```dockerfile
 ARG DD_GO_PATCHES_VERSION=v0.1.0
-ARG DD_GO_PATCHES_SHA256=REPLACE_WITH_VERIFIED_RELEASE_ARCHIVE_SHA256
+ARG DD_GO_PATCHES_SHA256=0e694b475848128f1af67b95c84ec8a09fc03ec30e0d33c386816d6bc42c495f
 
 RUN test "${#DD_GO_PATCHES_SHA256}" -eq 64 \
     && case "$DD_GO_PATCHES_SHA256" in *[!0-9a-f]*) exit 1 ;; esac \
@@ -113,6 +114,20 @@ test source contains no customer private libraries or credentials. The
 your local Kafka tooling). Mocktracer assertions are not cloud-ingestion proof.
 
 ## Maintenance
+
+### Dependency security boundary
+
+As of 2026-10-12, GitHub reports 11 open Dependabot alerts (4 high, 6 moderate,
+1 low), all associated with `tests/official-compat/go.mod`. The compatibility
+fixture is excluded from the Release archive, but exclusion alone does not prove
+that an application's dependency graph is unaffected. This behavioral patch is
+not a dependency-security clearance. Review the
+[repository security alerts](https://github.com/GuanceCloud/dd-go-patches/security/dependabot)
+and the actual application dependency graph before deployment. Upgrades require
+separate compatibility validation; this release does not silently upgrade the
+tested baseline.
+
+### Reproducible packaging
 
 Build a reproducible, allowlisted Release asset from a committed source snapshot:
 
