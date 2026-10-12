@@ -34,24 +34,26 @@ Keep the application's existing official Orchestrion installation:
 RUN go install github.com/DataDog/orchestrion@v1.12.1
 ```
 
-Insert the following before `orchestrion pin`. Replace `REPLACE_WITH_VERIFIED_40_HEX_COMMIT`
-with the full commit of this repository that your team has reviewed and tested.
-The placeholder intentionally fails validation. Store both defaults in the
-Dockerfile so the existing build command needs no extra arguments.
+Use the versioned Release asset instead of cloning the Git repository. Install
+`curl` in the builder's existing package-install step, and insert the following
+before `orchestrion pin`. Copy the archive SHA256 from the verified Release's
+`SHA256SUMS` into the Dockerfile; the placeholder intentionally fails verification.
+Both defaults live in the Dockerfile, so the build command needs no extra arguments.
 
 ```dockerfile
-ARG DD_GO_PATCHES_REPO=https://github.com/GuanceCloud/dd-go-patches.git
-ARG DD_GO_PATCHES_COMMIT=REPLACE_WITH_VERIFIED_40_HEX_COMMIT
+ARG DD_GO_PATCHES_VERSION=v0.1.0
+ARG DD_GO_PATCHES_SHA256=REPLACE_WITH_VERIFIED_RELEASE_ARCHIVE_SHA256
 
-RUN test -n "$DD_GO_PATCHES_REPO" \
-    && test "${#DD_GO_PATCHES_COMMIT}" -eq 40 \
-    && case "$DD_GO_PATCHES_COMMIT" in *[!0-9a-f]*) exit 1 ;; esac \
-    && git -c http.sslVerify=true clone --no-checkout "$DD_GO_PATCHES_REPO" /tmp/dd-go-patches \
-    && git -C /tmp/dd-go-patches checkout --detach "$DD_GO_PATCHES_COMMIT" \
-    && test "$(git -C /tmp/dd-go-patches rev-parse HEAD)" = "$DD_GO_PATCHES_COMMIT" \
+RUN test "${#DD_GO_PATCHES_SHA256}" -eq 64 \
+    && case "$DD_GO_PATCHES_SHA256" in *[!0-9a-f]*) exit 1 ;; esac \
+    && curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+      "https://github.com/GuanceCloud/dd-go-patches/releases/download/${DD_GO_PATCHES_VERSION}/dd-go-patches-${DD_GO_PATCHES_VERSION}.tar.gz" \
+      --output /tmp/dd-go-patches.tar.gz \
+    && printf '%s  %s\n' "$DD_GO_PATCHES_SHA256" /tmp/dd-go-patches.tar.gz | sha256sum -c - \
     && test ! -e /app/third_party/ddtrace-sarama \
     && test ! -e /app/patches/verify-official.go \
-    && mkdir -p /app/third_party /app/patches \
+    && mkdir -p /tmp/dd-go-patches /app/third_party /app/patches \
+    && tar -xzf /tmp/dd-go-patches.tar.gz -C /tmp/dd-go-patches \
     && cp -R /tmp/dd-go-patches/third_party/ddtrace-sarama /app/third_party/ddtrace-sarama \
     && cp /tmp/dd-go-patches/patches/verify-official.go /app/patches/verify-official.go
 
@@ -65,12 +67,14 @@ RUN orchestrion go build -o /go/bin/application .
 RUN go run ./patches/verify-official.go /go/bin/application
 ```
 
-This example assumes the application's working directory is `/app` and Git and
+This example assumes the application's working directory is `/app` and curl and
 trusted CA certificates are available. Adapt only the working directory/output
 path to the existing application. Runtime image, environment and command do not
-need changing. Never use a floating branch/latest or embed credentials in the
-URL, build arguments, image or logs. Use a dedicated secret/SSH mount if a private
-mirror is required. Existing same-name patch files cause a failure, not a merge.
+need changing. Pin both the Release version and archive SHA256; never download
+`latest` or trust a checksum fetched dynamically alongside the archive as the
+only integrity check. Never embed credentials in URLs, build arguments, images
+or logs. This public Release needs no credentials. Existing same-name patch files
+cause a failure, not a merge.
 
 The verifier fails closed for module-resolution errors, fork tracer/tool
 dependencies, unsupported selected versions, patch source changes, incorrect
@@ -109,6 +113,20 @@ test source contains no customer private libraries or credentials. The
 your local Kafka tooling). Mocktracer assertions are not cloud-ingestion proof.
 
 ## Maintenance
+
+Build a reproducible, allowlisted Release asset from a committed source snapshot:
+
+```bash
+bash scripts/build-release.sh v0.1.0 <reviewed-source-commit>
+```
+
+Outputs: `dist/v0.1.0/dd-go-patches-v0.1.0.tar.gz` and `SHA256SUMS`.
+The archive has no customer Dockerfiles, local logs or compatibility binaries.
+The script refuses to overwrite different artifacts. Publish both files on a
+GitHub Release targeting that exact source commit, verify the public download,
+and only then adopt its fixed SHA256. Do not overwrite published assets/tags;
+issue a new version for any change. Git commit checkout remains an optional
+alternative, but it must also pin and verify a reviewed full commit.
 
 - Pin upstream baseline, patch revision, source checksum and tested versions.
 - Keep patches small and add a deterministic regression test for each fix.

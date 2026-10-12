@@ -31,3 +31,10 @@ jobs:
         run: go build -o "$RUNNER_TEMP/verify-official" ./patches/verify-official.go
       - name: Check compatibility runner syntax
         run: bash -n scripts/test-official-compat.sh
+      - name: Check release packaging
+        run: |
+          bash -n scripts/build-release.sh
+          bash scripts/build-release.sh v0.1.0 "$GITHUB_SHA"
+          bash scripts/build-release.sh v0.1.0 "$GITHUB_SHA"
+          cd dist/v0.1.0
+          sha256sum -c SHA256SUMS
