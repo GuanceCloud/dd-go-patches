@@ -1,0 +1,33 @@
+name: Patch tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.26.3', '1.26.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: third_party/ddtrace-sarama/go.sum
+      - name: Unit tests and race detector
+        working-directory: third_party/ddtrace-sarama
+        run: go test -race -count=10 -timeout=120s ./...
+      - name: Vet
+        working-directory: third_party/ddtrace-sarama
+        run: go vet ./...
+      - name: Build the standalone verifier
+        run: go build -o "$RUNNER_TEMP/verify-official" ./patches/verify-official.go
+      - name: Check compatibility runner syntax
+        run: bash -n scripts/test-official-compat.sh

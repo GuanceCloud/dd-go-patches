@@ -1,0 +1,52 @@
+--- a/sarama.go
++++ b/sarama.go
+@@ -305,24 +305,43 @@
+ 	}
+ 	go func() {
+ 		spans := make(map[uint64]*tracer.Span)
++		// Keep at most one pending input. Sending it must remain a select case:
++		// Sarama may need us to drain a result before it can accept more input.
++		var pendingMsg *sarama.ProducerMessage
++		var pendingSpan *tracer.Span
+ 		defer close(wrapped.input)
+ 		defer close(wrapped.successes)
+ 		defer close(wrapped.errors)
++		defer func() {
++			if pendingSpan != nil {
++				pendingSpan.Finish(tracer.WithError(sarama.ErrShuttingDown))
++			}
++		}()
+ 		for {
++			var inputFromCaller <-chan *sarama.ProducerMessage
++			var inputToSarama chan<- *sarama.ProducerMessage
++			if pendingMsg == nil {
++				inputFromCaller = wrapped.input
++			} else {
++				inputToSarama = p.Input()
++			}
+ 			select {
+-			case msg := <-wrapped.input:
+-				span := startProducerSpan(cfg, saramaConfig.Version, msg)
++			case msg := <-inputFromCaller:
++				pendingMsg = msg
++				pendingSpan = startProducerSpan(cfg, saramaConfig.Version, msg)
+ 				setProduceCheckpoint(cfg.dataStreamsEnabled, cfg.ClusterID(), msg, saramaConfig.Version)
+-				p.Input() <- msg
++			case inputToSarama <- pendingMsg:
+ 				if saramaConfig.Producer.Return.Successes {
+-					spanID := span.Context().SpanID()
+-					spans[spanID] = span
++					spanID := pendingSpan.Context().SpanID()
++					spans[spanID] = pendingSpan
+ 				} else {
+ 					// if returning successes isn't enabled, we just finish the
+ 					// span right away because there's no way to know when it will
+ 					// be done
+-					span.Finish()
++					pendingSpan.Finish()
+ 				}
++				pendingMsg = nil
++				pendingSpan = nil
+ 			case msg, ok := <-p.Successes():
+ 				if !ok {
+ 					// producer was closed, so exit

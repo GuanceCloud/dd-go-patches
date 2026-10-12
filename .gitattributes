@@ -1,0 +1,2 @@
+# Unified diffs contain context prefixes before upstream Go tab indentation.
+*.patch -whitespace

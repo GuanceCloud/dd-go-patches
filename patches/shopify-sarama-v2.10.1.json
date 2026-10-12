@@ -1,0 +1,15 @@
+{
+  "id": "shopify-sarama-async-producer-deadlock",
+  "patch_revision": 1,
+  "upstream_module": "github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2",
+  "upstream_version": "v2.10.1",
+  "source_directory": "third_party/ddtrace-sarama",
+  "source_sha256": "d7d7be709a97dec05ff67640aac7465520b15f4854788671ba70c24b95a9b9f5",
+  "validated_core": "github.com/DataDog/dd-trace-go/v2@v2.10.1",
+  "validated_sarama": "github.com/Shopify/sarama@v1.38.1",
+  "validated_orchestrion": "github.com/DataDog/orchestrion@v1.12.1",
+  "validated_manual_tracer": "gopkg.in/DataDog/dd-trace-go.v1@v1.74.8",
+  "upstream_issue": "https://github.com/DataDog/dd-trace-go/issues/5361",
+  "status": "local-backport",
+  "retirement_condition": "Verify the same Shopify/Sarama fault-recovery scenario on an official release before removing the local replacement."
+}

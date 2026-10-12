@@ -1,0 +1,9 @@
+dd-go-patches contains locally maintained patches to DataDog dd-trace-go.
+
+The third_party/ddtrace-sarama directory is derived from:
+github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2 v2.10.1
+Copyright Datadog, Inc.; licensed under the Apache License, Version 2.0.
+Original source notices and the upstream LICENSE are retained.
+
+Local modifications are documented in third_party/ddtrace-sarama/PATCH-NOTICE.md.
+This repository is not an official DataDog release or a replacement tracer SDK.
