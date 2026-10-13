@@ -8,9 +8,9 @@ tracer SDK.
 ## v0.2.0 dependency-preserving adapter
 
 v0.2.0 adds a multi-profile adapter. **These commands are not in the published
-v0.1.0/v0.1.1 archives.** Those releases remain immutable. Use the v0.2.0 archive
-and its pinned checksum once release verification is complete; never relabel
-or replace an old asset.
+v0.1.0/v0.1.1 archives.** Those releases remain immutable. Use the
+[v0.2.0 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.2.0)
+and its pinned checksum; never relabel or replace an old asset.
 
 | Dimension | Currently supported adapter profiles |
 |---|---|
@@ -19,6 +19,35 @@ or replace an old asset.
 | Effective official Shopify/Sarama | v1.23.0 **or** v1.38.1; not the interval between them |
 | Manual tracer, if present | Unmodified official v1.74.8 |
 | Other libraries / private business code | Application regression required; not certified by the adapter |
+
+### Current Dockerfile download
+
+Keep official `go install github.com/DataDog/orchestrion@v1.12.1`, the application's
+working directory `/app`, runtime image, output binary name, ENV and CMD. Add
+`curl` to the builder's existing package installation. Download **inside** the
+Dockerfile; no extra build arguments or files supplied by the customer are needed:
+
+```dockerfile
+ARG DD_GO_PATCHES_VERSION=v0.2.0
+ARG DD_GO_PATCHES_SHA256=65cb0bcec4ac4da0a401ecaee85bbed400d435ee178391eb3dd33bc3fe573ec1
+
+RUN test "${#DD_GO_PATCHES_SHA256}" -eq 64 \
+    && case "$DD_GO_PATCHES_SHA256" in *[!0-9a-f]*) exit 1 ;; esac \
+    && curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+      "https://github.com/GuanceCloud/dd-go-patches/releases/download/${DD_GO_PATCHES_VERSION}/dd-go-patches-${DD_GO_PATCHES_VERSION}.tar.gz" \
+      --output /tmp/dd-go-patches.tar.gz \
+    && printf '%s  %s\n' "$DD_GO_PATCHES_SHA256" /tmp/dd-go-patches.tar.gz | sha256sum -c - \
+    && test ! -e /app/third_party/ddtrace-sarama \
+    && test ! -e /app/patches/verify-official.go \
+    && mkdir -p /tmp/dd-go-patches /app/third_party /app/patches \
+    && tar -xzf /tmp/dd-go-patches.tar.gz -C /tmp/dd-go-patches \
+    && cp -R /tmp/dd-go-patches/third_party/ddtrace-sarama /app/third_party/ddtrace-sarama \
+    && cp /tmp/dd-go-patches/patches/verify-official.go /app/patches/verify-official.go
+```
+
+Source commit: `1259c55a55afa311bdfa05057a95725d07a5388e`.
+[Source CI](https://github.com/GuanceCloud/dd-go-patches/actions/runs/38340514883).
+The archive is allowlisted and reproducible; customer files are not published.
 
 After extracting the **new** archive into the application, explicitly select
 the tested instrumentation baseline without overwriting another existing
@@ -112,7 +141,7 @@ remains unchanged for the previously tested v1.38.1 profile. A selected nominal
 requirement such as v1.38.1 may coexist with an official v1.23.0 replacement;
 the verifier checks the replacement and the built binary, not just `require`.
 
-## Dockerfile integration
+## Historical v0.1.1 Dockerfile integration
 
 Keep the application's existing official Orchestrion installation:
 
@@ -246,10 +275,10 @@ tested baseline.
 Build a reproducible, allowlisted Release asset from a committed source snapshot:
 
 ```bash
-bash scripts/build-release.sh v0.1.1 <reviewed-source-commit>
+bash scripts/build-release.sh v0.2.0 1259c55a55afa311bdfa05057a95725d07a5388e
 ```
 
-Outputs: `dist/v0.1.1/dd-go-patches-v0.1.1.tar.gz` and `SHA256SUMS`.
+Outputs: `dist/v0.2.0/dd-go-patches-v0.2.0.tar.gz` and `SHA256SUMS`.
 The archive has no customer Dockerfiles, local logs or compatibility binaries.
 The script refuses to overwrite different artifacts. Publish both files on a
 GitHub Release targeting that exact source commit, verify the public download,
