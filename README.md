@@ -42,16 +42,15 @@ RUN go install github.com/DataDog/orchestrion@v1.12.1
 
 Use the versioned Release asset instead of cloning the Git repository. Install
 `curl` in the builder's existing package-install step, and insert the following
-before `orchestrion pin`. The configuration below targets the
+before `orchestrion pin`. The configuration below uses the published
 [v0.1.1 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.1.1)
-and its archive SHA256. The checksum placeholder deliberately fails until
-publication and public-download verification are complete; do not bypass it.
-Review the Release and checksum before adoption.
+and its publicly downloaded, verified archive SHA256. Review the Release and
+checksum before adoption.
 Both defaults live in the Dockerfile, so the build command needs no extra arguments.
 
 ```dockerfile
 ARG DD_GO_PATCHES_VERSION=v0.1.1
-ARG DD_GO_PATCHES_SHA256=REPLACE_WITH_VERIFIED_V0_1_1_ARCHIVE_SHA256
+ARG DD_GO_PATCHES_SHA256=215d9be750ab9800be9a3c2a464ba709a20b51719d0def2c35715572414b869c
 
 RUN test "${#DD_GO_PATCHES_SHA256}" -eq 64 \
     && case "$DD_GO_PATCHES_SHA256" in *[!0-9a-f]*) exit 1 ;; esac \
@@ -136,6 +135,17 @@ The legacy fixture uses Kafka protocol 2.3.0, Sarama v1.23.0's maximum, against
 the local test broker. This is not a promise of support for every broker version
 or features introduced in newer Sarama releases. Security review of legacy
 Sarama and its transitive dependencies is separate from this deadlock fix.
+
+v0.1.1 source commit: `152bb80f320471314865353ec06bef5f68e4656b`.
+[CI](https://github.com/GuanceCloud/dd-go-patches/actions/runs/38334430578)
+passed on Go 1.26.3/1.26.4. The public archive passed anonymous download,
+pinned-checksum verification, explicit configuration, effective-version checks
+and unit/race tests. Against the same two-second local broker pause, the patched
+and unwrapped cases each completed 5,000 handlers and 10,000 successful produces
+with no producer errors, while the unpatched wrapper stalled all 10 workers.
+These assertions do not validate a customer's private application or cloud
+ingestion. Tracer startup `available_version` may report the nominal requirement;
+use Go's module replacement and binary build info for the effective version.
 
 ## Maintenance
 
