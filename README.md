@@ -5,7 +5,7 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
-## v0.2.2 candidate: IBM integration v2.10.1 profile
+## Published v0.2.2: IBM integration v2.10.1 profile
 
 The next release candidate adds a distinct official IBM/Sarama integration
 v2.10.1 patch. It preserves upstream APIs and newer cluster ID, DSM, service
@@ -13,10 +13,10 @@ name-source, and custom-tag behavior, changing only async producer forwarding.
 The verifier selects the profile from actual application imports and the
 resolved integration version. Supported profile: official core v2.10.1,
 IBM integration v2.10.1, effective IBM/Sarama v1.44.0, Orchestrion v1.12.1.
-This profile is separate from v2.3.0. The locally built candidate archive has
-SHA256 `c6de22b6b0fd2d566fbd470ad4c40f86058a7c5c230bc092a8931a1932cdf98b`.
-It is not customer-usable until that archive is uploaded to the v0.2.2 Release;
-see the precise validation boundary in the [v0.2.2 release notes](docs/releases/v0.2.2.md).
+This profile is separate from v2.3.0. The [v0.2.2 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.2.2)
+contains both IBM profiles. Download [dd-go-patches-v0.2.2.tar.gz](https://github.com/GuanceCloud/dd-go-patches/releases/download/v0.2.2/dd-go-patches-v0.2.2.tar.gz)
+and verify SHA256 `c6de22b6b0fd2d566fbd470ad4c40f86058a7c5c230bc092a8931a1932cdf98b`.
+See the precise validation boundary in the [v0.2.2 release notes](docs/releases/v0.2.2.md).
 
 ## Published v0.2.1: Shopify and IBM/Sarama support
 
