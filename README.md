@@ -5,7 +5,87 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
-## Shopify/Sarama async-producer deadlock patch
+## v0.2.0 dependency-preserving adapter
+
+v0.2.0 adds a multi-profile adapter. **These commands are not in the published
+v0.1.0/v0.1.1 archives.** Those releases remain immutable. Use the v0.2.0 archive
+and its pinned checksum once release verification is complete; never relabel
+or replace an old asset.
+
+| Dimension | Currently supported adapter profiles |
+|---|---|
+| Official Orchestrion | v1.12.1 |
+| Official core / Shopify integration | v2.10.1 / v2.10.1 |
+| Effective official Shopify/Sarama | v1.23.0 **or** v1.38.1; not the interval between them |
+| Manual tracer, if present | Unmodified official v1.74.8 |
+| Other libraries / private business code | Application regression required; not certified by the adapter |
+
+After extracting the **new** archive into the application, explicitly select
+the tested instrumentation baseline without overwriting another existing
+tracer version. This does not set business Sarama/gRPC versions. Replace the
+old unconditional business-version edits with:
+
+```dockerfile
+RUN go run ./patches/verify-official.go --check-baseline
+RUN go mod edit \
+    -require=github.com/DataDog/dd-trace-go/v2@v2.10.1 \
+    -require=github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2@v2.10.1
+RUN orchestrion pin
+RUN go run ./patches/verify-official.go --inspect
+RUN go run ./patches/verify-official.go --apply
+RUN go run ./patches/verify-official.go
+# Keep the customer's existing output path/name here.
+RUN orchestrion go build -o /go/bin/application .
+RUN go run ./patches/verify-official.go /go/bin/application
+```
+
+- `--check-baseline` checks existing official core/integration versions and
+  rejects forks or other selected versions/replacements before the explicit
+  Dockerfile bootstrap. Missing modules may be added at v2.10.1; unsupported
+  existing versions require deliberate review, not an automatic downgrade.
+- `--inspect` resolves modules and actual application package dependencies with
+  `-mod=readonly`, prints an exact profile and effective gRPC version, and fails
+  for unsupported combinations. A module in the graph, or an unused `replace`,
+  is not treated as evidence of the application's Kafka implementation.
+- `--apply` adds only the official Shopify integration's local replacement and
+  explicit tool import. It does **not** set business Sarama/gRPC versions or
+  upgrade/downgrade core/manual tracer/integration versions. They must already
+  match a tested profile. A different existing integration replacement is not
+  overwritten. Changes to existing selected/effective dependencies trigger
+  rollback of touched files. Additional module-graph metadata is reported for
+  review; it is not mistaken for proof that application code uses those modules.
+- Applications actually using IBM/Sarama or legacy v1 Sarama wrappers are
+  rejected, including mixed Shopify/IBM applications. Unused IBM modules in a
+  tools dependency graph alone are not grounds for rejection. Separate adapters
+  and fault-recovery tests are needed for those paths.
+- Existing requirements/replacements (including private common libraries and
+  gRPC) are retained. Retention is **not** a compatibility guarantee: for example,
+  a customer's gRPC v1.57.2 replacement still needs business validation.
+- Use the full project, the same `GOFLAGS`/build tags and target platform as the
+  real build. Package discovery excludes tools-only imports; the final woven
+  binary is checked separately. A successful binary check proves module identity
+  and patch inclusion, not every runtime path or endpoint.
+- Go workspaces and vendor-only workflows are not automatically adapted. Apply
+  in the intended standalone module (`GOWORK=off` when appropriate). Review
+  `orchestrion pin` changes separately: the adapter preserves the graph it sees
+  **after** pin, not the application's pre-pin dependency graph.
+
+The standalone patch module keeps v1.23.0 as its minimum requirement/test
+default. Its own replacement is not inherited by a main application. The
+application's effective version selects the profile; no universal version is
+forced onto every project.
+
+Run both adapter profiles without rewriting the maintained fixtures:
+
+```bash
+go test -race ./patches/verify-official.go ./patches/verify-official_test.go
+bash scripts/test-sarama-matrix.sh
+# Optional real local Kafka + official automatic weaving:
+bash scripts/test-official-compat.sh v1.23.0
+bash scripts/test-official-compat.sh v1.38.1
+```
+
+## Published v0.1.1: Shopify/Sarama fixed legacy profile
 
 The wrapper could synchronously block forwarding a message into Sarama while
 Sarama needed the same wrapper to drain an earlier success/error. The patch

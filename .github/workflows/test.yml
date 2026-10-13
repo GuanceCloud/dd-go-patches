@@ -21,22 +21,18 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: third_party/ddtrace-sarama/go.sum
-      - name: Unit tests and race detector
-        working-directory: third_party/ddtrace-sarama
-        run: go test -race -count=10 -timeout=120s ./...
-      - name: Vet
-        working-directory: third_party/ddtrace-sarama
-        run: go vet ./...
+      - name: Both supported Sarama profiles (unit, race and vet)
+        run: bash scripts/test-sarama-matrix.sh
       - name: Build the standalone verifier
         run: go build -o "$RUNNER_TEMP/verify-official" ./patches/verify-official.go
       - name: Test effective dependency checks
         run: go test -race ./patches/verify-official.go ./patches/verify-official_test.go
       - name: Check compatibility runner syntax
-        run: bash -n scripts/test-official-compat.sh
+        run: bash -n scripts/test-official-compat.sh scripts/test-sarama-matrix.sh
       - name: Check release packaging
         run: |
           bash -n scripts/build-release.sh
-          bash scripts/build-release.sh v0.1.1 "$GITHUB_SHA"
-          bash scripts/build-release.sh v0.1.1 "$GITHUB_SHA"
-          cd dist/v0.1.1
+          bash scripts/build-release.sh v0.2.0 "$GITHUB_SHA"
+          bash scripts/build-release.sh v0.2.0 "$GITHUB_SHA"
+          cd dist/v0.2.0
           sha256sum -c SHA256SUMS

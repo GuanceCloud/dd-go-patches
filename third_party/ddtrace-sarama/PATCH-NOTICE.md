@@ -13,14 +13,17 @@ Changes:
   input, order, finish timing, and shutdown coverage.
 - `go.mod`: remove the upstream repository-relative core replacement
   (`../../..`) so this copied submodule can be tested independently; retain
-  Shopify/Sarama v1.23.0 as the effective implementation for this release.
+  Shopify/Sarama v1.23.0 as the minimum requirement and standalone test default.
+  An application's existing requirements/replacements select its effective
+  version; dependency replacements are not inherited by the application.
 - `go.sum`: add official core checksums needed for independent tests.
 
 Official module/import paths, APIs and `orchestrion.yml` are unchanged. This
 patch does not implement runtime isolation between official and GuanceCloud
 tracers. Deploy with official Orchestrion/core and reconcile any fork leftovers.
 
-Validated target: official core/integration v2.10.1, Shopify/Sarama v1.23.0,
+Validated targets: official core/integration v2.10.1, Shopify/Sarama v1.23.0 or
+v1.38.1 (exact tested versions, not an inferred interval),
 official Orchestrion v1.12.1. Other core versions, IBM/Sarama, or legacy v1
 Sarama implementations are not covered by this patch. Applications must still
 drain successes/errors according to the Sarama contract.
