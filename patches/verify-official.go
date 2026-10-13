@@ -9,10 +9,14 @@ import (
 	"debug/buildinfo"
 	"encoding/json"
 	"fmt"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +29,72 @@ const (
 type module struct {
 	Path, Version, Dir string
 	Replace            *module
+}
+
+// Go reports the selected requirement separately from its replacement. Check
+// the implementation actually compiled, not only the nominal selected version.
+func effectiveModule(m module) (string, string) {
+	if m.Replace != nil {
+		return m.Replace.Path, m.Replace.Version
+	}
+	return m.Path, m.Version
+}
+
+func validatedSarama(m module) bool {
+	path, version := effectiveModule(m)
+	return m.Path == "github.com/Shopify/sarama" && path == m.Path && version == "v1.23.0"
+}
+
+// Add only the target integration after pin; do not overwrite the customer's
+// existing integration imports or rules. This also handles pin pruning its
+// aggregate all/v2 import when upstream package-relative replacements fail.
+func enableSaramaToolFile(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		data = []byte("//go:build tools\n\npackage tools\n\nimport _ \"github.com/DataDog/orchestrion\" // integration\n")
+	} else if err != nil {
+		return err
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, data, parser.ParseComments)
+	if err != nil {
+		return err
+	}
+	for _, spec := range file.Imports {
+		value, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return err
+		}
+		if value == saramaModule {
+			if spec.Name == nil || spec.Name.Name != "_" {
+				return fmt.Errorf("target integration must be a blank import")
+			}
+			return nil
+		}
+	}
+	at := fset.Position(file.Name.End()).Offset
+	updated := append([]byte{}, data[:at]...)
+	updated = append(updated, []byte("\n\nimport _ "+strconv.Quote(saramaModule)+" // integration\n")...)
+	updated = append(updated, data[at:]...)
+	updated, err = format.Source(updated)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, updated, 0o644)
+}
+
+func hasExplicitSaramaIntegration(path string) bool {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+	if err != nil {
+		return false
+	}
+	for _, spec := range file.Imports {
+		value, err := strconv.Unquote(spec.Path.Value)
+		if err == nil && value == saramaModule && spec.Name != nil && spec.Name.Name == "_" {
+			return true
+		}
+	}
+	return false
 }
 
 func fail(format string, args ...any) {
@@ -40,8 +110,15 @@ func forbidden(path string) bool {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--enable-sarama" {
+		if err := enableSaramaToolFile("orchestrion.tool.go"); err != nil {
+			fail("cannot enable official Shopify integration: %v", err)
+		}
+		fmt.Println("PATCH_CONFIG_OK explicit-official-Shopify-integration=enabled")
+		return
+	}
 	if len(os.Args) > 2 {
-		fail("usage: verify-official.go [application-binary]")
+		fail("usage: verify-official.go [--enable-sarama | application-binary]")
 	}
 	out, err := exec.Command("go", "list", "-m", "-json", "all").Output()
 	if err != nil {
@@ -69,8 +146,9 @@ func main() {
 		fail("manual v1 compatibility was validated with unmodified v1.74.8; review other versions explicitly")
 	}
 	raw := mods["github.com/Shopify/sarama"]
-	if raw.Version != "v1.38.1" || (raw.Replace != nil && (raw.Replace.Path != raw.Path || raw.Replace.Version != "v1.38.1")) {
-		fail("this patch was validated with Shopify/sarama v1.38.1")
+	if !validatedSarama(raw) {
+		path, version := effectiveModule(raw)
+		fail("this release requires effective Shopify/sarama v1.23.0; selected=%s effective=%s@%s; preserve the official v1.23.0 replacement", raw.Version, path, version)
 	}
 	s := mods[saramaModule]
 	patchDir := os.Getenv("PATCH_SOURCE_DIR")
@@ -101,6 +179,9 @@ func main() {
 			fail("fork instrumentation reference remains in %s", name)
 		}
 	}
+	if !hasExplicitSaramaIntegration("orchestrion.tool.go") {
+		fail("explicit official Shopify integration missing; run verify-official.go --enable-sarama after pin")
+	}
 	tool, err := exec.LookPath("orchestrion")
 	if err != nil {
 		fail("official orchestrion executable is not on PATH")
@@ -114,7 +195,7 @@ func main() {
 		if err != nil {
 			fail("cannot inspect built application: %v", err)
 		}
-		seenCore, seenSarama := false, false
+		seenCore, seenSarama, seenRawSarama := false, false, false
 		for _, dep := range info.Deps {
 			if forbidden(dep.Path) || (dep.Replace != nil && forbidden(dep.Replace.Path)) {
 				fail("built application contains fork tracer/tool: %s", dep.Path)
@@ -131,10 +212,20 @@ func main() {
 					fail("built application did not use the local Shopify patch")
 				}
 			}
+			if dep.Path == "github.com/Shopify/sarama" {
+				seenRawSarama = true
+				rawDep := module{Path: dep.Path, Version: dep.Version}
+				if dep.Replace != nil {
+					rawDep.Replace = &module{Path: dep.Replace.Path, Version: dep.Replace.Version}
+				}
+				if !validatedSarama(rawDep) {
+					fail("built application did not use official Shopify/sarama v1.23.0")
+				}
+			}
 		}
-		if !seenCore || !seenSarama {
+		if !seenCore || !seenSarama || !seenRawSarama {
 			fail("built application lacks the expected official core/Shopify modules")
 		}
 	}
-	fmt.Println("PATCH_CHECK_OK official-orchestrion=v1.12.1 official-core=v2.10.1 local-Shopify-patch=verified no-fork-tracer=true")
+	fmt.Println("PATCH_CHECK_OK official-orchestrion=v1.12.1 official-core=v2.10.1 effective-Shopify-sarama=v1.23.0 local-Shopify-patch=verified no-fork-tracer=true")
 }

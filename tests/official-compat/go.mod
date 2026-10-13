@@ -61,6 +61,7 @@ require (
 	github.com/DataDog/dd-trace-go/contrib/twmb/franz-go/v2 v2.10.1 // indirect
 	github.com/DataDog/dd-trace-go/contrib/valkey-io/valkey-go/v2 v2.10.1 // indirect
 	github.com/DataDog/dd-trace-go/contrib/valyala/fasthttp/v2 v2.10.1 // indirect
+	github.com/DataDog/zstd v1.5.8-0.20260421145859-31a7e515a571 // indirect
 	github.com/IBM/sarama v1.44.0 // indirect
 	github.com/aerospike/aerospike-client-go/v7 v7.10.2 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
@@ -167,6 +168,7 @@ require (
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
+	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/polyfloyd/go-errorlint v1.8.1-0.20250906200200-9b25878c4dea // indirect
 	github.com/redis/go-redis/v9 v9.7.3 // indirect
 	github.com/redis/rueidis v1.0.74 // indirect
@@ -212,6 +214,10 @@ require (
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
+	gopkg.in/jcmturner/aescts.v1 v1.0.1 // indirect
+	gopkg.in/jcmturner/dnsutils.v1 v1.0.1 // indirect
+	gopkg.in/jcmturner/gokrb5.v7 v7.2.3 // indirect
+	gopkg.in/jcmturner/rpc.v1 v1.1.0 // indirect
 	gorm.io/gorm v1.25.12 // indirect
 	k8s.io/apimachinery v0.35.6 // indirect
 	k8s.io/client-go v0.35.1 // indirect
@@ -318,3 +324,6 @@ require (
 replace github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2 => ../../third_party/ddtrace-sarama
 
 replace github.com/DataDog/dd-trace-go/v2 => github.com/DataDog/dd-trace-go/v2 v2.10.1
+
+// Exercise a newer nominal requirement with the customer's effective version.
+replace github.com/Shopify/sarama => github.com/Shopify/sarama v1.23.0

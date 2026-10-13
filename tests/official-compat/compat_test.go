@@ -151,7 +151,7 @@ func TestAutoSaramaUsesOfficialPatchedWrapper(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 	cfg := sarama.NewConfig()
-	cfg.Version = sarama.V2_8_0_0
+	cfg.Version = sarama.V2_3_0_0 // Sarama v1.23.0's maximum supported protocol.
 	cfg.Producer.Return.Successes = true
 	p, err := sarama.NewAsyncProducer([]string{"127.0.0.1:19092"}, cfg)
 	if err != nil {

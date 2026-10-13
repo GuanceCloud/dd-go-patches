@@ -18,13 +18,19 @@ covered. Applications must still drain result channels as required by Sarama.
 | Official Orchestrion | v1.12.1 |
 | Official dd-trace-go core | v2.10.1 |
 | Official Shopify/Sarama integration | v2.10.1 + this patch |
-| Shopify/Sarama | v1.38.1 |
+| Shopify/Sarama (effective implementation) | v1.23.0 |
 | Official v1 manual mux/gRPC instrumentation | v1.74.8 |
 
 Sources: `third_party/ddtrace-sarama/`. Audit diff and manifest: `patches/`.
 Original licenses and copyright notices are retained. IBM/Sarama and legacy v1
 Sarama implementations are not covered. Other versions need separate validation;
 do not silently downgrade an application's dependency graph to fit this table.
+
+Release profiles are explicit: v0.1.1 targets effective Sarama v1.23.0, while
+[v0.1.0](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.1.0)
+remains unchanged for the previously tested v1.38.1 profile. A selected nominal
+requirement such as v1.38.1 may coexist with an official v1.23.0 replacement;
+the verifier checks the replacement and the built binary, not just `require`.
 
 ## Dockerfile integration
 
@@ -36,14 +42,16 @@ RUN go install github.com/DataDog/orchestrion@v1.12.1
 
 Use the versioned Release asset instead of cloning the Git repository. Install
 `curl` in the builder's existing package-install step, and insert the following
-before `orchestrion pin`. The defaults below identify the published
-[v0.1.0 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.1.0)
-and its archive SHA256. Review the Release and checksum before adoption.
+before `orchestrion pin`. The configuration below targets the
+[v0.1.1 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.1.1)
+and its archive SHA256. The checksum placeholder deliberately fails until
+publication and public-download verification are complete; do not bypass it.
+Review the Release and checksum before adoption.
 Both defaults live in the Dockerfile, so the build command needs no extra arguments.
 
 ```dockerfile
-ARG DD_GO_PATCHES_VERSION=v0.1.0
-ARG DD_GO_PATCHES_SHA256=0e694b475848128f1af67b95c84ec8a09fc03ec30e0d33c386816d6bc42c495f
+ARG DD_GO_PATCHES_VERSION=v0.1.1
+ARG DD_GO_PATCHES_SHA256=REPLACE_WITH_VERIFIED_V0_1_1_ARCHIVE_SHA256
 
 RUN test "${#DD_GO_PATCHES_SHA256}" -eq 64 \
     && case "$DD_GO_PATCHES_SHA256" in *[!0-9a-f]*) exit 1 ;; esac \
@@ -61,8 +69,10 @@ RUN test "${#DD_GO_PATCHES_SHA256}" -eq 64 \
 RUN go mod edit \
     -require=github.com/DataDog/dd-trace-go/v2@v2.10.1 \
     -require=github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2@v2.10.1 \
+    -replace=github.com/Shopify/sarama=github.com/Shopify/sarama@v1.23.0 \
     -replace=github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2=./third_party/ddtrace-sarama
 RUN orchestrion pin
+RUN go run ./patches/verify-official.go --enable-sarama
 RUN go run ./patches/verify-official.go
 RUN orchestrion go build -o /go/bin/application .
 RUN go run ./patches/verify-official.go /go/bin/application
@@ -78,10 +88,19 @@ or logs. This public Release needs no credentials. Existing same-name patch file
 cause a failure, not a merge.
 
 The verifier fails closed for module-resolution errors, fork tracer/tool
-dependencies, unsupported selected versions, patch source changes, incorrect
+dependencies, unsupported effective versions, patch source changes, incorrect
 Orchestrion binaries or missing replacements in the application build info.
-If v1 is present, this initial patch requires the tested v1.74.8 combination.
+If v1 is present, this release still requires the tested v1.74.8 combination.
 It does not prove that every private library or business endpoint is compatible.
+
+The `--enable-sarama` preparation step adds only a blank import of the official
+patched Shopify integration to `orchestrion.tool.go`, preserving existing rules
+and imports. Run it after pin: upstream pin can prune its aggregate `all/v2`
+entry when resolving repository-relative replacements. This makes the target
+integration explicit; it does not restore or certify every other integration.
+The normal verifier remains fail-closed and requires this explicit import.
+Pin can also upgrade tracer v1 and transitive dependencies: review the final
+module/config diff and validate the actual application before deployment.
 
 Keep official manual instrumentation and official automatic instrumentation in
 the same implementation. Reconcile existing GuanceCloud tracer imports/configs
@@ -113,6 +132,11 @@ test source contains no customer private libraries or credentials. The
 `inventory-item-delete` test topic must exist (for example, pre-create it using
 your local Kafka tooling). Mocktracer assertions are not cloud-ingestion proof.
 
+The legacy fixture uses Kafka protocol 2.3.0, Sarama v1.23.0's maximum, against
+the local test broker. This is not a promise of support for every broker version
+or features introduced in newer Sarama releases. Security review of legacy
+Sarama and its transitive dependencies is separate from this deadlock fix.
+
 ## Maintenance
 
 ### Dependency security boundary
@@ -132,10 +156,10 @@ tested baseline.
 Build a reproducible, allowlisted Release asset from a committed source snapshot:
 
 ```bash
-bash scripts/build-release.sh v0.1.0 <reviewed-source-commit>
+bash scripts/build-release.sh v0.1.1 <reviewed-source-commit>
 ```
 
-Outputs: `dist/v0.1.0/dd-go-patches-v0.1.0.tar.gz` and `SHA256SUMS`.
+Outputs: `dist/v0.1.1/dd-go-patches-v0.1.1.tar.gz` and `SHA256SUMS`.
 The archive has no customer Dockerfiles, local logs or compatibility binaries.
 The script refuses to overwrite different artifacts. Publish both files on a
 GitHub Release targeting that exact source commit, verify the public download,

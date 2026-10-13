@@ -11,6 +11,7 @@ export DD_TRACE_STARTUP_LOGS=false
 export DD_INSTRUMENTATION_TELEMETRY_ENABLED=false
 
 cd "$repo_root/tests/official-compat"
+go run ../../patches/verify-official.go --enable-sarama
 orchestrion go test -c -o "$build_dir/compat.test" .
 "$build_dir/compat.test" -test.v -test.count=3 -test.timeout=60s
 CGO_ENABLED=0 orchestrion go build -o "$build_dir/smoke" ./cmd/smoke
