@@ -90,9 +90,13 @@ func TestSelectPlan(t *testing.T) {
 }
 
 func ibmModules() map[string]module {
+	return ibmModulesAt("v2.3.0", "v1.43.2")
+}
+
+func ibmModulesAt(integration, sarama string) map[string]module {
 	mods := supportedModules("v1.23.0")
-	mods[rawIBM] = module{Path: rawIBM, Version: "v1.43.2"}
-	mods[ibmModule] = module{Path: ibmModule, Version: "v2.3.0"}
+	mods[rawIBM] = module{Path: rawIBM, Version: sarama}
+	mods[ibmModule] = module{Path: ibmModule, Version: integration}
 	return mods
 }
 
@@ -116,7 +120,7 @@ func TestSelectPlanActualIBMAndMixedTargets(t *testing.T) {
 			}
 		})
 	}
-	for _, tc := range []struct{ path, version string }{{rawIBM, "v1.45.0"}, {ibmModule, "v2.10.1"}} {
+	for _, tc := range []struct{ path, version string }{{rawIBM, "v1.45.0"}, {ibmModule, "v2.11.0"}} {
 		mods := ibmModules()
 		mods[tc.path] = module{Path: tc.path, Version: tc.version}
 		if _, err := selectPlan(mods, []string{rawIBM}); err == nil {
@@ -131,6 +135,15 @@ func TestSelectPlanActualIBMAndMixedTargets(t *testing.T) {
 	mods[rawIBM] = module{Path: rawIBM, Version: "v1.44.0", Replace: &module{Path: rawIBM, Version: "v1.43.2"}}
 	if _, err := selectPlan(mods, []string{rawIBM}); err != nil {
 		t.Fatal("effective IBM replacement not recognized:", err)
+	}
+	mods = ibmModulesAt("v2.10.1", "v1.44.0")
+	p, err := selectPlan(mods, []string{rawIBM})
+	if err != nil || p.Profile != "ibm-v2.10.1-sarama-v1.44.0" || p.Targets[0].Directory != ibmTargetV2101.Directory {
+		t.Fatalf("IBM v2.10.1 profile not selected: %+v %v", p, err)
+	}
+	mods[rawIBM] = module{Path: rawIBM, Version: "v1.43.2"}
+	if _, err := selectPlan(mods, []string{rawIBM}); err == nil {
+		t.Fatal("IBM v2.10.1 with unsupported IBM/Sarama v1.43.2 was accepted")
 	}
 }
 

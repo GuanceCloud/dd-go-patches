@@ -17,15 +17,18 @@ mkdir -p "$output_dir"
 # Archive committed, explicitly allowlisted files only. Do not package the
 # caller's worktree, customer Dockerfiles, build outputs, credentials or logs.
 # git archive fixes metadata to the commit; gzip -n omits time/name metadata.
-git -C "$repo_root" archive --format=tar "$source_commit" \
+git -C "$repo_root" archive --format=tar --mtime='1970-01-01 00:00:00 +0000' "$source_commit" \
   LICENSE NOTICE \
   third_party/ddtrace-sarama \
   third_party/ddtrace-ibm-sarama \
+  third_party/ddtrace-ibm-sarama-v2.10.1 \
   patches/verify-official.go \
   patches/shopify-sarama-v2.10.1-deadlock.patch \
   patches/shopify-sarama-v2.10.1.json \
   patches/ibm-sarama-v2.3.0-deadlock.patch \
   patches/ibm-sarama-v2.3.0.json \
+  patches/ibm-sarama-v2.10.1-deadlock.patch \
+  patches/ibm-sarama-v2.10.1.json \
   | gzip -n > "$scratch_dir/$asset"
 (
   cd "$scratch_dir"

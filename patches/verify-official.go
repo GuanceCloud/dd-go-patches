@@ -43,7 +43,8 @@ type patchTarget struct {
 }
 
 var shopifyTarget = patchTarget{"shopify", saramaModule, "v2.10.1", rawSarama, "", "third_party/ddtrace-sarama", "sarama.go", patchSHA256}
-var ibmTarget = patchTarget{"ibm", ibmModule, "v2.3.0", rawIBM, "", "third_party/ddtrace-ibm-sarama", "producer.go", "1ef23f6872eb0e582fb8e3b91611603206e6ba18c74123ef69f81c88aaca866a"}
+var ibmTargetV23 = patchTarget{"ibm", ibmModule, "v2.3.0", rawIBM, "", "third_party/ddtrace-ibm-sarama", "producer.go", "1ef23f6872eb0e582fb8e3b91611603206e6ba18c74123ef69f81c88aaca866a"}
+var ibmTargetV2101 = patchTarget{"ibm", ibmModule, "v2.10.1", rawIBM, "", "third_party/ddtrace-ibm-sarama-v2.10.1", "producer.go", "9c576ae38be49c58a0bda54da2261ed5eaed431654e536b5727b3bf8c13b8a0f"}
 
 func validatedTarget(t patchTarget, m module) bool {
 	path, version := effectiveModule(m)
@@ -53,7 +54,17 @@ func validatedTarget(t patchTarget, m module) bool {
 	if t.Name == "shopify" {
 		return validatedSarama(m)
 	}
-	return t.Name == "ibm" && (version == "v1.43.2" || version == "v1.44.0")
+	if t.Name != "ibm" {
+		return false
+	}
+	switch t.Version {
+	case "v2.3.0":
+		return version == "v1.43.2" || version == "v1.44.0"
+	case "v2.10.1":
+		return version == "v1.44.0"
+	default:
+		return false
+	}
 }
 
 func targetsOrDefault(targets []patchTarget) []patchTarget {
@@ -136,7 +147,19 @@ func selectPlan(mods map[string]module, imports []string) (plan, error) {
 		used[path] = true
 	}
 	profiles := []string{}
-	for _, target := range []patchTarget{shopifyTarget, ibmTarget} {
+	selectedTargets := []patchTarget{shopifyTarget}
+	if used[rawIBM] {
+		integration := mods[ibmModule]
+		switch integration.Version {
+		case "v2.3.0":
+			selectedTargets = append(selectedTargets, ibmTargetV23)
+		case "v2.10.1":
+			selectedTargets = append(selectedTargets, ibmTargetV2101)
+		default:
+			return p, fmt.Errorf("unsupported official IBM/Sarama integration %s; supported local patch profiles are v2.3.0 and v2.10.1", integration.Version)
+		}
+	}
+	for _, target := range selectedTargets {
 		if !used[target.RawModule] {
 			continue
 		}
@@ -210,7 +233,7 @@ func applicationImports() ([]string, error) {
 	if strings.HasPrefix(target, "-") {
 		return nil, fmt.Errorf("PATCH_APP_TARGET must be a Go package target, not a flag")
 	}
-	out, err := exec.Command("go", "list", "-mod=readonly", "-deps", "-f", "{{.ImportPath}}", target).Output()
+	out, err := exec.Command("go", "list", "-mod=readonly", "-buildvcs=false", "-deps", "-f", "{{.ImportPath}}", target).Output()
 	if err != nil {
 		return nil, fmt.Errorf("cannot inspect actual application packages read-only; run in the full project with its build tags and dependencies")
 	}

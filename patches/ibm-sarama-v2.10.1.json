@@ -1,0 +1,16 @@
+{
+  "id": "ibm-sarama-async-producer-deadlock",
+  "patch_revision": 1,
+  "upstream_module": "github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2",
+  "upstream_version": "v2.10.1",
+  "source_directory": "third_party/ddtrace-ibm-sarama-v2.10.1",
+  "source_file": "producer.go",
+  "source_sha256": "9c576ae38be49c58a0bda54da2261ed5eaed431654e536b5727b3bf8c13b8a0f",
+  "validated_core": "github.com/DataDog/dd-trace-go/v2@v2.10.1",
+  "validated_sarama_profiles": ["v1.44.0"],
+  "validated_orchestrion": "github.com/DataDog/orchestrion@v1.12.1",
+  "application_policy": "Preserve business requirements/replacements; select the actual IBM/Sarama integration version and apply only its matching source patch.",
+  "application_compatibility": "Not certified by the patch verifier; private libraries and other integrations require application regression testing.",
+  "status": "local-backport",
+  "retirement_condition": "Verify the same IBM/Sarama fault-recovery scenario on an official release before removing this local replacement."
+}

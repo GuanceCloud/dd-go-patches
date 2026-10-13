@@ -23,6 +23,7 @@ jobs:
           cache-dependency-path: |
             third_party/ddtrace-sarama/go.sum
             third_party/ddtrace-ibm-sarama/go.sum
+            third_party/ddtrace-ibm-sarama-v2.10.1/go.sum
       - name: Both supported Sarama profiles (unit, race and vet)
         run: bash scripts/test-sarama-matrix.sh
       - name: IBM backpressure regression and vet
@@ -36,7 +37,7 @@ jobs:
       - name: Check release packaging
         run: |
           bash -n scripts/build-release.sh
-          bash scripts/build-release.sh v0.2.1 "$GITHUB_SHA"
-          bash scripts/build-release.sh v0.2.1 "$GITHUB_SHA"
-          cd dist/v0.2.1
+          bash scripts/build-release.sh v0.2.2 "$GITHUB_SHA"
+          bash scripts/build-release.sh v0.2.2 "$GITHUB_SHA"
+          cd dist/v0.2.2
           sha256sum -c SHA256SUMS

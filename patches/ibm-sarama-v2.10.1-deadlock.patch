@@ -1,0 +1,60 @@
+--- a/contrib/IBM/sarama/producer.go
++++ b/contrib/IBM/sarama/producer.go
+@@ -158,24 +158,44 @@
+ 	}
+ 	go func() {
+ 		spans := make(map[uint64]*tracer.Span)
++		// Keep at most one message pending in this adapter. Unlike a direct
++		// send from the input case, this lets the select keep draining producer
++		// results while Sarama applies backpressure to its input channel.
++		var pendingMsg *sarama.ProducerMessage
++		var pendingSpan *tracer.Span
+ 		defer close(wrapped.input)
+ 		defer close(wrapped.successes)
+ 		defer close(wrapped.errors)
++		defer func() {
++			if pendingSpan != nil {
++				pendingSpan.Finish(tracer.WithError(sarama.ErrShuttingDown))
++			}
++		}()
+ 		for {
++			var inputFromCaller <-chan *sarama.ProducerMessage
++			var inputToSarama chan<- *sarama.ProducerMessage
++			if pendingMsg == nil {
++				inputFromCaller = wrapped.input
++			} else {
++				inputToSarama = p.Input()
++			}
+ 			select {
+-			case msg := <-wrapped.input:
+-				span := startProducerSpan(cfg, saramaConfig.Version, msg)
+-				setProduceCheckpoint(cfg.dataStreamsEnabled, cfg.ClusterID(), msg, saramaConfig.Version)
+-				p.Input() <- msg
+-				if saramaConfig.Producer.Return.Successes {
+-					spanID := span.Context().SpanID()
+-					spans[spanID] = span
+-				} else {
+-					// if returning successes isn't enabled, we just finish the
+-					// span right away because there's no way to know when it will
+-					// be done
+-					span.Finish()
+-				}
++			case msg := <-inputFromCaller:
++				pendingMsg = msg
++				pendingSpan = startProducerSpan(cfg, saramaConfig.Version, msg)
++				setProduceCheckpoint(cfg.dataStreamsEnabled, cfg.ClusterID(), msg, saramaConfig.Version)
++			case inputToSarama <- pendingMsg:
++				if saramaConfig.Producer.Return.Successes {
++					spanID := pendingSpan.Context().SpanID()
++					spans[spanID] = pendingSpan
++				} else {
++					// if returning successes isn't enabled, we just finish the
++					// span right away because there's no way to know when it will
++					// be done
++					pendingSpan.Finish()
++				}
++				pendingMsg = nil
++				pendingSpan = nil
+ 			case msg, ok := <-p.Successes():
+ 				if !ok {
+ 					// producer was closed, so exit

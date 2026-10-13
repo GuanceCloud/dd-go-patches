@@ -5,12 +5,22 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/dd-go-patches-ibm-pipeline.XXXXXX")
 version=${1:-v1.43.2}
 case "$version" in v1.43.2|v1.44.0) ;; *) printf 'Unsupported IBM pipeline version\n' >&2; exit 1 ;; esac
+integration_version=${COMPAT_INTEGRATION_VERSION:-v2.3.0}
+case "$integration_version:$version" in
+  v2.3.0:v1.43.2|v2.3.0:v1.44.0|v2.10.1:v1.44.0) ;;
+  *) printf 'Unsupported IBM pipeline profile\n' >&2; exit 1 ;;
+esac
 cp -R "$repo_root/tests/ibm-pipeline" "$build_dir/fixture"
 cd "$build_dir/fixture"
 export GOWORK=off REAL_KAFKA_REPRO=1
 export DD_TRACE_AGENT_URL="${DD_TRACE_AGENT_URL:-http://127.0.0.1:9529}"
 export DD_TRACE_STARTUP_LOGS=false DD_INSTRUMENTATION_TELEMETRY_ENABLED=false
-go mod edit -replace="github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2=$repo_root/third_party/ddtrace-ibm-sarama"
+case "$integration_version" in
+  v2.3.0) ibm_source_dir="$repo_root/third_party/ddtrace-ibm-sarama" ;;
+  v2.10.1) ibm_source_dir="$repo_root/third_party/ddtrace-ibm-sarama-v2.10.1" ;;
+esac
+go mod edit -require="github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2@$integration_version"
+go mod edit -replace="github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2=$ibm_source_dir"
 go mod edit -require="github.com/IBM/sarama@$version"
 go mod tidy
 cp go.mod baseline.mod

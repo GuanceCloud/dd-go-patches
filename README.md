@@ -5,6 +5,18 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
+## v0.2.2 candidate: IBM integration v2.10.1 profile
+
+The next release candidate adds a distinct official IBM/Sarama integration
+v2.10.1 patch. It preserves upstream APIs and newer cluster ID, DSM, service
+name-source, and custom-tag behavior, changing only async producer forwarding.
+The verifier selects the profile from actual application imports and the
+resolved integration version. Supported profile: official core v2.10.1,
+IBM integration v2.10.1, effective IBM/Sarama v1.44.0, Orchestrion v1.12.1.
+This profile is separate from v2.3.0. It is not customer-usable until the
+v0.2.2 archive is published; see the precise validation boundary in the
+[v0.2.2 release notes](docs/releases/v0.2.2.md).
+
 ## Published v0.2.1: Shopify and IBM/Sarama support
 
 The [v0.2.1 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.2.1)
@@ -17,6 +29,11 @@ IBM is validated with integration v2.3.0, core v2.10.1, and effective IBM/Sarama
 v1.43.2 or v1.44.0. Shopify remains validated with integration/core v2.10.1 and
 effective Shopify/Sarama v1.23.0 or v1.38.1. This is a local backport, not a
 DataDog-published tracer release.
+
+The customer Dockerfile for v0.2.2 must copy both IBM source directories from
+the archive and must not hard-code `PATCH_IBM_SOURCE_DIR`; the verifier chooses
+the source directory from the resolved official integration version after
+`orchestrion pin`.
 
 The verifier discovers actual dependencies of the build entrypoint `.`; use
 `PATCH_APP_TARGET=./cmd/application` consistently for another build target.
@@ -52,6 +69,8 @@ Run from a source checkout:
 go test -race -count=10 ./patches/verify-official.go ./patches/verify-official_test.go
 (cd third_party/ddtrace-ibm-sarama && go test -race -count=10 ./... && go vet ./...)
 bash scripts/test-ibm-matrix.sh
+# New profile: upstream IBM integration v2.10.1 + IBM/Sarama v1.44.0
+COMPAT_INTEGRATION_VERSION=v2.10.1 COMPAT_SARAMA_VERSION=v1.44.0 bash scripts/test-ibm-compat.sh
 # Explicitly opt-in: requires the local reproduction broker/container.
 bash scripts/test-ibm-pipeline.sh
 bash scripts/test-ibm-compat.sh
