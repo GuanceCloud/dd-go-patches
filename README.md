@@ -5,12 +5,18 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
-## Unreleased: actual-entrypoint IBM/Sarama support
+## Published v0.2.1: Shopify and IBM/Sarama support
 
-The working source now contains an independent official-namespace IBM patch:
-IBM integration v2.3.0 + IBM/Sarama v1.43.2 or v1.44.0 + core v2.10.1. **This is not in
-the published v0.2.0 archive.** No new download URL/checksum is claimed here.
-Do not remove an IBM guard from the old archive and call the IBM path fixed.
+The [v0.2.1 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.2.1)
+contains independent official-namespace patches for Shopify and IBM Sarama.
+Download [dd-go-patches-v0.2.1.tar.gz](https://github.com/GuanceCloud/dd-go-patches/releases/download/v0.2.1/dd-go-patches-v0.2.1.tar.gz)
+and verify SHA256 `042a13483990f8b2336417ab2085e5ded9ccf5fd1ea3c8fe37ad2f38946827ca`.
+The archive contains both patch directories and the verifier.
+
+IBM is validated with integration v2.3.0, core v2.10.1, and effective IBM/Sarama
+v1.43.2 or v1.44.0. Shopify remains validated with integration/core v2.10.1 and
+effective Shopify/Sarama v1.23.0 or v1.38.1. This is a local backport, not a
+DataDog-published tracer release.
 
 The verifier discovers actual dependencies of the build entrypoint `.`; use
 `PATCH_APP_TARGET=./cmd/application` consistently for another build target.
@@ -35,6 +41,11 @@ customer regression obligation. An old HTTP module merely present in the tools
 graph is not grounds for rejection. Other IBM/core versions are not inferred
 to work and are not silently upgraded/downgraded to match this profile.
 
+For a Dockerfile integration, pin the release version and checksum, copy both
+patch directories, and explicitly align HTTP instrumentation to v2.10.1 when it
+is used. See [the v0.2.1 migration notes](docs/releases/v0.2.1.md) for the
+release-specific Dockerfile steps.
+
 Run from a source checkout:
 
 ```bash
@@ -56,11 +67,9 @@ container, preserves run logs and exits without synchronously closing deadlocked
 producer goroutines. Applications must continue draining successes/errors;
 recovery counts do not establish exactly-once delivery.
 
-Release packaging now includes both patch source directories and manifests.
-A future Dockerfile must also copy `third_party/ddtrace-ibm-sarama` from the
-downloaded archive. Merely changing the version/SHA in the old Shopify-only
-copy command is insufficient. Wait for an actually published new archive and
-its verified checksum; keep the existing application name/runtime/ENV/CMD.
+Release packaging includes both patch source directories and manifests. A
+Dockerfile must copy `third_party/ddtrace-ibm-sarama` as well as the Shopify
+directory if it needs both. Keep the existing application name/runtime/ENV/CMD.
 
 First pin can select IBM/Sarama v1.44.0 from an initial v1.43.2 requirement.
 Both exact versions are covered; --apply preserves the post-pin graph and does
@@ -81,7 +90,7 @@ and its pinned checksum; never relabel or replace an old asset.
 | Manual tracer, if present | Unmodified official v1.74.8 |
 | Other libraries / private business code | Application regression required; not certified by the adapter |
 
-### Current Dockerfile download
+### Historical v0.2.0 Dockerfile download
 
 Keep official `go install github.com/DataDog/orchestrion@v1.12.1`, the application's
 working directory `/app`, runtime image, output binary name, ENV and CMD. Add
