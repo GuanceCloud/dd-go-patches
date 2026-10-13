@@ -13,9 +13,10 @@ name-source, and custom-tag behavior, changing only async producer forwarding.
 The verifier selects the profile from actual application imports and the
 resolved integration version. Supported profile: official core v2.10.1,
 IBM integration v2.10.1, effective IBM/Sarama v1.44.0, Orchestrion v1.12.1.
-This profile is separate from v2.3.0. It is not customer-usable until the
-v0.2.2 archive is published; see the precise validation boundary in the
-[v0.2.2 release notes](docs/releases/v0.2.2.md).
+This profile is separate from v2.3.0. The locally built candidate archive has
+SHA256 `c6de22b6b0fd2d566fbd470ad4c40f86058a7c5c230bc092a8931a1932cdf98b`.
+It is not customer-usable until that archive is uploaded to the v0.2.2 Release;
+see the precise validation boundary in the [v0.2.2 release notes](docs/releases/v0.2.2.md).
 
 ## Published v0.2.1: Shopify and IBM/Sarama support
 
