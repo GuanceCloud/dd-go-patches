@@ -20,19 +20,26 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache-dependency-path: third_party/ddtrace-sarama/go.sum
+          cache-dependency-path: |
+            third_party/ddtrace-sarama/go.sum
+            third_party/ddtrace-ibm-sarama/go.sum
       - name: Both supported Sarama profiles (unit, race and vet)
         run: bash scripts/test-sarama-matrix.sh
+      - name: IBM backpressure regression and vet
+        working-directory: third_party/ddtrace-ibm-sarama
+        run: |
+          go test -race -count=10 -timeout=120s ./...
+          go vet ./...
       - name: Build the standalone verifier
         run: go build -o "$RUNNER_TEMP/verify-official" ./patches/verify-official.go
       - name: Test effective dependency checks
         run: go test -race ./patches/verify-official.go ./patches/verify-official_test.go
       - name: Check compatibility runner syntax
-        run: bash -n scripts/test-official-compat.sh scripts/test-sarama-matrix.sh
+        run: bash -n scripts/test-official-compat.sh scripts/test-sarama-matrix.sh scripts/test-ibm-compat.sh scripts/test-ibm-pipeline.sh scripts/test-release-package.sh
       - name: Check release packaging
         run: |
           bash -n scripts/build-release.sh
-          bash scripts/build-release.sh v0.2.0 "$GITHUB_SHA"
-          bash scripts/build-release.sh v0.2.0 "$GITHUB_SHA"
-          cd dist/v0.2.0
+          bash scripts/build-release.sh v0.2.1 "$GITHUB_SHA"
+          bash scripts/build-release.sh v0.2.1 "$GITHUB_SHA"
+          cd dist/v0.2.1
           sha256sum -c SHA256SUMS

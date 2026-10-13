@@ -20,9 +20,12 @@ mkdir -p "$output_dir"
 git -C "$repo_root" archive --format=tar "$source_commit" \
   LICENSE NOTICE \
   third_party/ddtrace-sarama \
+  third_party/ddtrace-ibm-sarama \
   patches/verify-official.go \
   patches/shopify-sarama-v2.10.1-deadlock.patch \
   patches/shopify-sarama-v2.10.1.json \
+  patches/ibm-sarama-v2.3.0-deadlock.patch \
+  patches/ibm-sarama-v2.3.0.json \
   | gzip -n > "$scratch_dir/$asset"
 (
   cd "$scratch_dir"

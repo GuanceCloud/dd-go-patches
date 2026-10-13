@@ -5,7 +5,62 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
-## v0.2.0 dependency-preserving adapter
+## Unreleased: actual-entrypoint IBM/Sarama support
+
+The working source now contains an independent official-namespace IBM patch:
+IBM integration v2.3.0 + IBM/Sarama v1.43.2 + core v2.10.1. **This is not in
+the published v0.2.0 archive.** No new download URL/checksum is claimed here.
+Do not remove an IBM guard from the old archive and call the IBM path fixed.
+
+The verifier discovers actual dependencies of the build entrypoint `.`; use
+`PATCH_APP_TARGET=./cmd/application` consistently for another build target.
+It selects Shopify, IBM, or both when both are actually used. An unused module
+or historical replacement does not select a patch. Each selected integration
+is replaced and explicitly enabled atomically; selected/effective business
+dependency drift rolls back the operation. Binary verification checks every
+selected raw client and patched integration, not just Shopify.
+
+Known API mismatch: actual official net/http integration v2.3.0 does not compile
+against core v2.10.1 (`httpsec.ProtectRoundTrip`). If the application uses that
+integration, explicitly align the **instrumentation module** to v2.10.1 before
+pin/apply, and review the graph diff. `--apply` will not silently upgrade it:
+
+```dockerfile
+RUN go mod edit -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.10.1
+```
+
+This does not change business imports, Sarama requirements/replacements or a
+customer's gRPC replacement. Compatibility of private libraries remains a
+customer regression obligation. An old HTTP module merely present in the tools
+graph is not grounds for rejection. Other IBM/core versions are not inferred
+to work and are not silently upgraded/downgraded to match this profile.
+
+Run from a source checkout:
+
+```bash
+go test -race -count=10 ./patches/verify-official.go ./patches/verify-official_test.go
+(cd third_party/ddtrace-ibm-sarama && go test -race -count=10 ./... && go vet ./...)
+# Explicitly opt-in: requires the local reproduction broker/container.
+bash scripts/test-ibm-pipeline.sh
+bash scripts/test-ibm-compat.sh
+COMPAT_GRPC_VERSION=v1.57.2 bash scripts/test-ibm-compat.sh
+bash scripts/test-release-package.sh
+```
+
+The upstream IBM integration suite can additionally use
+`INTEGRATION=1 KAFKA_BROKERS=127.0.0.1:19092 go test -race ./...` from the patch
+module. The local fault runner temporarily pauses only the reproduction Kafka
+container, preserves run logs and exits without synchronously closing deadlocked
+producer goroutines. Applications must continue draining successes/errors;
+recovery counts do not establish exactly-once delivery.
+
+Release packaging now includes both patch source directories and manifests.
+A future Dockerfile must also copy `third_party/ddtrace-ibm-sarama` from the
+downloaded archive. Merely changing the version/SHA in the old Shopify-only
+copy command is insufficient. Wait for an actually published new archive and
+its verified checksum; keep the existing application name/runtime/ENV/CMD.
+
+## Published v0.2.0 dependency-preserving adapter (Shopify only)
 
 v0.2.0 adds a multi-profile adapter. **These commands are not in the published
 v0.1.0/v0.1.1 archives.** Those releases remain immutable. Use the

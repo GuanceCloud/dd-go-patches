@@ -6,4 +6,9 @@ Copyright Datadog, Inc.; licensed under the Apache License, Version 2.0.
 Original source notices and the upstream LICENSE are retained.
 
 Local modifications are documented in third_party/ddtrace-sarama/PATCH-NOTICE.md.
+
+The third_party/ddtrace-ibm-sarama directory is derived from:
+github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2 v2.3.0
+Copyright Datadog, Inc. Original licenses and source notices are retained.
+Local modifications are documented in third_party/ddtrace-ibm-sarama/PATCH-NOTICE.md.
 This repository is not an official DataDog release or a replacement tracer SDK.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -85,6 +86,208 @@ func TestSelectPlan(t *testing.T) {
 		if p.GRPC != "google.golang.org/grpc@v1.57.2" || !strings.Contains(p.Scope, "not full application") {
 			t.Fatalf("effective dependency/scope not reported: %+v", p)
 		}
+	}
+}
+
+func ibmModules() map[string]module {
+	mods := supportedModules("v1.23.0")
+	mods[rawIBM] = module{Path: rawIBM, Version: "v1.43.2"}
+	mods[ibmModule] = module{Path: ibmModule, Version: "v2.3.0"}
+	return mods
+}
+
+func TestSelectPlanActualIBMAndMixedTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		imports []string
+		want    int
+	}{
+		{"IBM only with unused Shopify modules and replace", []string{rawIBM}, 1},
+		{"mixed actual packages", []string{rawSarama, rawIBM}, 2},
+		{"unused IBM metadata", []string{rawSarama}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := selectPlan(ibmModules(), tc.imports)
+			if err != nil || len(p.Targets) != tc.want {
+				t.Fatalf("unexpected targets: %+v %v", p, err)
+			}
+			if tc.imports[0] == rawIBM && (p.Targets[0].Module != ibmModule || p.Profile != "ibm-v2.3.0-sarama-v1.43.2") {
+				t.Fatalf("IBM application selected wrong patch: %+v", p)
+			}
+		})
+	}
+	for _, tc := range []struct{ path, version string }{{rawIBM, "v1.44.0"}, {ibmModule, "v2.10.1"}} {
+		mods := ibmModules()
+		mods[tc.path] = module{Path: tc.path, Version: tc.version}
+		if _, err := selectPlan(mods, []string{rawIBM}); err == nil {
+			t.Fatalf("unsupported IBM combination accepted: %+v", tc)
+		}
+	}
+	mods := ibmModules()
+	mods[rawIBM] = module{Path: rawIBM, Version: "v1.44.0", Replace: &module{Path: rawIBM, Version: "v1.43.2"}}
+	if _, err := selectPlan(mods, []string{rawIBM}); err != nil {
+		t.Fatal("effective IBM replacement not recognized:", err)
+	}
+}
+
+func TestSelectPlanHTTPCompatibilityIsActualDependencyScoped(t *testing.T) {
+	mods := ibmModules()
+	mods[httpModule] = module{Path: httpModule, Version: "v2.3.0"}
+	if _, err := selectPlan(mods, []string{rawIBM}); err != nil {
+		t.Fatal("unused old HTTP metadata caused rejection:", err)
+	}
+	if _, err := selectPlan(mods, []string{rawIBM, httpModule}); err == nil || !strings.Contains(err.Error(), "ProtectRoundTrip") {
+		t.Fatal("known-incompatible active HTTP integration was not diagnosed")
+	}
+	mods[httpModule] = module{Path: httpModule, Version: "v2.10.1"}
+	if _, err := selectPlan(mods, []string{rawIBM, httpModule}); err != nil {
+		t.Fatal("aligned HTTP integration rejected:", err)
+	}
+}
+
+func TestValidateBinaryRejectsAnUnselectedSarama(t *testing.T) {
+	mods := ibmModules()
+	p, err := selectPlan(mods, []string{rawSarama})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBinary(&debug.BuildInfo{Deps: []*debug.Module{{Path: rawIBM, Version: "v1.43.2"}}}, mods, p); err == nil || !strings.Contains(err.Error(), "unselected") {
+		t.Fatal("binary target mismatch accepted")
+	}
+}
+
+func TestApplicationImportsMatchesConfiguredBuildEntrypoint(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/bin/sh\nfor arg do printf '%s\\n' \"$arg\"; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	for _, target := range []string{"", "./cmd/smoke", "-tags=unsafe"} {
+		t.Setenv("PATCH_APP_TARGET", target)
+		args, err := applicationImports()
+		if strings.HasPrefix(target, "-") {
+			if err == nil {
+				t.Fatal("flag accepted as target")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := target
+		if want == "" {
+			want = "."
+		}
+		if args[len(args)-1] != want {
+			t.Fatalf("wrong entrypoint: %v", args)
+		}
+	}
+}
+
+func TestValidateBinaryTargets(t *testing.T) {
+	for _, imports := range [][]string{{rawSarama}, {rawIBM}, {rawSarama, rawIBM}} {
+		mods := ibmModules()
+		p, err := selectPlan(mods, imports)
+		if err != nil {
+			t.Fatal(err)
+		}
+		makeInfo := func() *debug.BuildInfo {
+			info := &debug.BuildInfo{Deps: []*debug.Module{{Path: core, Version: "v2.10.1"}}}
+			for _, target := range p.Targets {
+				dir := "/patch/" + target.Name
+				s := mods[target.Module]
+				s.Replace = &module{Path: dir, Dir: dir}
+				mods[target.Module] = s
+				info.Deps = append(info.Deps,
+					&debug.Module{Path: target.Module, Version: target.Version, Replace: &debug.Module{Path: dir}},
+					&debug.Module{Path: target.RawModule, Version: target.Sarama})
+			}
+			return info
+		}
+		if err := validateBinary(makeInfo(), mods, p); err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []string{"missing patch", "wrong patch path", "wrong integration version", "raw drift", "core drift", "fork", "missing core", "missing raw"} {
+			t.Run(strings.Join(imports, "+")+"/"+kind, func(t *testing.T) {
+				info := makeInfo()
+				switch kind {
+				case "missing patch":
+					info.Deps[1].Replace = nil
+				case "wrong patch path":
+					info.Deps[1].Replace.Path = "/wrong"
+				case "wrong integration version":
+					info.Deps[1].Version = "v2.99.0"
+				case "raw drift":
+					info.Deps[2].Replace = &debug.Module{Path: info.Deps[2].Path, Version: "v1.99.0"}
+				case "core drift":
+					info.Deps[0].Version = "v2.3.0"
+				case "fork":
+					info.Deps = append(info.Deps, &debug.Module{Path: "github.com/GuanceCloud/dd-trace-go/v2"})
+				case "missing core":
+					info.Deps = info.Deps[1:]
+				case "missing raw":
+					info.Deps = append(info.Deps[:2], info.Deps[3:]...)
+				}
+				if err := validateBinary(info, mods, p); err == nil {
+					t.Fatal("invalid binary accepted")
+				}
+			})
+		}
+	}
+}
+
+func TestApplyMixedTargetsAtomicAndPreservesIBM(t *testing.T) {
+	for _, failIBM := range []bool{false, true} {
+		t.Run(fmt.Sprint(failIBM), func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			original := []byte("module example.com/mixed\n\ngo 1.26\n")
+			if err := os.WriteFile("go.mod", original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			mods := ibmModules()
+			p, err := selectPlan(mods, []string{rawIBM, rawSarama})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range p.Targets {
+				p.Targets[i].Directory = "/patch/" + p.Targets[i].Name
+			}
+			resolve := func() (map[string]module, error) {
+				after := ibmModules()
+				for _, target := range p.Targets {
+					s := after[target.Module]
+					s.Replace = &module{Path: target.Directory, Dir: target.Directory}
+					after[target.Module] = s
+				}
+				if failIBM {
+					r := after[rawIBM]
+					r.Version = "v1.44.0"
+					after[rawIBM] = r
+				}
+				return after, nil
+			}
+			err = applyFiles(mods, "unused", resolve, func(string) error {
+				return os.WriteFile("go.mod", append(append([]byte{}, original...), []byte("// edited\n")...), 0o644)
+			}, p.Targets...)
+			if failIBM {
+				got, _ := os.ReadFile("go.mod")
+				if err == nil || !bytes.Equal(got, original) {
+					t.Fatal("IBM drift not rolled back")
+				}
+				if _, err := os.Stat("orchestrion.tool.go"); !os.IsNotExist(err) {
+					t.Fatal("mixed config not rolled back")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, target := range p.Targets {
+					if !hasExplicitSaramaIntegration("orchestrion.tool.go", target.Module) {
+						t.Fatal("missing target import")
+					}
+				}
+			}
+		})
 	}
 }
 

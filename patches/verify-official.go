@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 )
@@ -25,7 +26,42 @@ const (
 	saramaModule = "github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2"
 	patchSHA256  = "d7d7be709a97dec05ff67640aac7465520b15f4854788671ba70c24b95a9b9f5"
 	rawSarama    = "github.com/Shopify/sarama"
+	ibmModule    = "github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2"
+	rawIBM       = "github.com/IBM/sarama"
+	httpModule   = "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
 )
+
+type patchTarget struct {
+	Name       string `json:"name"`
+	Module     string `json:"module"`
+	Version    string `json:"version"`
+	RawModule  string `json:"raw_module"`
+	Sarama     string `json:"effective_sarama"`
+	Directory  string `json:"source_directory"`
+	SourceFile string `json:"source_file"`
+	SHA256     string `json:"source_sha256"`
+}
+
+var shopifyTarget = patchTarget{"shopify", saramaModule, "v2.10.1", rawSarama, "", "third_party/ddtrace-sarama", "sarama.go", patchSHA256}
+var ibmTarget = patchTarget{"ibm", ibmModule, "v2.3.0", rawIBM, "", "third_party/ddtrace-ibm-sarama", "producer.go", "1ef23f6872eb0e582fb8e3b91611603206e6ba18c74123ef69f81c88aaca866a"}
+
+func validatedTarget(t patchTarget, m module) bool {
+	path, version := effectiveModule(m)
+	if m.Path != t.RawModule || path != t.RawModule {
+		return false
+	}
+	if t.Name == "shopify" {
+		return validatedSarama(m)
+	}
+	return t.Name == "ibm" && version == "v1.43.2"
+}
+
+func targetsOrDefault(targets []patchTarget) []patchTarget {
+	if len(targets) == 0 {
+		return []patchTarget{shopifyTarget}
+	}
+	return targets
+}
 
 type module struct {
 	Path, Version, Dir string
@@ -48,13 +84,14 @@ func validatedSarama(m module) bool {
 }
 
 type plan struct {
-	Profile      string `json:"profile"`
-	Sarama       string `json:"effective_sarama"`
-	Core         string `json:"effective_core"`
-	Integration  string `json:"effective_integration"`
-	ManualTracer string `json:"effective_manual_tracer,omitempty"`
-	GRPC         string `json:"effective_grpc,omitempty"`
-	Scope        string `json:"scope"`
+	Profile      string        `json:"profile"`
+	Sarama       string        `json:"effective_sarama"`
+	Core         string        `json:"effective_core"`
+	Integration  string        `json:"effective_integration"`
+	ManualTracer string        `json:"effective_manual_tracer,omitempty"`
+	GRPC         string        `json:"effective_grpc,omitempty"`
+	Scope        string        `json:"scope"`
+	Targets      []patchTarget `json:"targets,omitempty"`
 }
 
 // An explicit Dockerfile bootstrap may add the tested official integration,
@@ -65,13 +102,14 @@ func checkBaseline(mods map[string]module) error {
 			return fmt.Errorf("fork tracer/tool remains; reconcile explicitly before bootstrap")
 		}
 	}
-	for _, path := range []string{core, saramaModule} {
+	for _, expected := range []module{{Path: core, Version: "v2.10.1"}, {Path: saramaModule, Version: "v2.10.1"}} {
+		path := expected.Path
 		m, exists := mods[path]
 		if !exists {
 			continue
 		}
-		if m.Version != "v2.10.1" || (m.Replace != nil && (m.Replace.Path != path || m.Replace.Version != "v2.10.1")) {
-			return fmt.Errorf("existing %s is not unmodified official v2.10.1; refusing to overwrite its selected version/replacement", path)
+		if m.Version != expected.Version || (m.Replace != nil && (m.Replace.Path != path || m.Replace.Version != expected.Version)) {
+			return fmt.Errorf("existing %s is not unmodified official %s; refusing to overwrite its selected version/replacement", path, expected.Version)
 		}
 	}
 	return nil
@@ -80,43 +118,57 @@ func checkBaseline(mods map[string]module) error {
 // Module presence alone is not evidence that application code uses an
 // integration: all/v2 and manual v1 can bring unused integrations into the graph.
 func selectPlan(mods map[string]module, imports []string) (plan, error) {
-	p := plan{Scope: "Shopify/v2 Kafka patch only; not full application compatibility"}
+	p := plan{Scope: "selected Sarama/v2 Kafka patches only; not full application compatibility"}
 	for _, m := range mods {
 		if forbidden(m.Path) || (m.Replace != nil && forbidden(m.Replace.Path)) {
 			return p, fmt.Errorf("fork tracer/tool remains; reconcile explicitly before applying")
 		}
 	}
-	shopify := false
+	used := make(map[string]bool)
 	for _, path := range imports {
 		if forbidden(path) {
 			return p, fmt.Errorf("fork tracer/tool package remains")
-		}
-		if path == "github.com/IBM/sarama" || strings.HasPrefix(path, "github.com/DataDog/dd-trace-go/contrib/IBM/sarama/") {
-			return p, fmt.Errorf("application uses IBM/Sarama; this patch does not cover it")
 		}
 		if path == "gopkg.in/DataDog/dd-trace-go.v1/contrib/Shopify/sarama" ||
 			path == "gopkg.in/DataDog/dd-trace-go.v1/contrib/IBM/sarama" {
 			return p, fmt.Errorf("application uses a legacy v1 Sarama wrapper; this v2 patch does not cover it")
 		}
-		shopify = shopify || path == rawSarama
+		used[path] = true
 	}
-	if !shopify {
-		return p, fmt.Errorf("no Shopify/Sarama package in application dependencies; refusing to inject an unused integration")
+	profiles := []string{}
+	for _, target := range []patchTarget{shopifyTarget, ibmTarget} {
+		if !used[target.RawModule] {
+			continue
+		}
+		raw := mods[target.RawModule]
+		_, target.Sarama = effectiveModule(raw)
+		if !validatedTarget(target, raw) {
+			return p, fmt.Errorf("unsupported effective %s %s; do not change business dependencies to force a match", target.RawModule, target.Sarama)
+		}
+		s := mods[target.Module]
+		if s.Version != target.Version {
+			return p, fmt.Errorf("official %s %s required; this tool will not change its selected version", target.Module, target.Version)
+		}
+		p.Targets = append(p.Targets, target)
+		profiles = append(profiles, target.Name+"-"+target.Version+"-sarama-"+target.Sarama)
 	}
-	raw := mods[rawSarama]
-	_, p.Sarama = effectiveModule(raw)
-	if !validatedSarama(raw) {
-		return p, fmt.Errorf("unsupported effective Shopify/Sarama %s; tested versions: v1.23.0, v1.38.1; do not change business dependencies to force a match", p.Sarama)
+	if len(p.Targets) == 0 {
+		return p, fmt.Errorf("no Shopify/IBM Sarama package in application dependencies; refusing to inject unused integrations")
 	}
+	p.Sarama, p.Integration = p.Targets[0].Sarama, p.Targets[0].Version
 	c := mods[core]
 	_, p.Core = effectiveModule(c)
 	if c.Version != "v2.10.1" || (c.Replace != nil && (c.Replace.Path != core || c.Replace.Version != "v2.10.1")) {
 		return p, fmt.Errorf("official core v2.10.1 required; this tool will not upgrade or downgrade it")
 	}
-	s := mods[saramaModule]
-	p.Integration = s.Version
-	if s.Version != "v2.10.1" {
-		return p, fmt.Errorf("official Shopify integration v2.10.1 required; this tool will not change its selected version")
+	// This exact old HTTP integration calls the pre-v2.10 httpsec API. Do not
+	// silently change it in --apply, and do not mistake unused graph metadata
+	// for an actual application dependency.
+	if h, exists := mods[httpModule]; exists && used[httpModule] {
+		path, version := effectiveModule(h)
+		if path == httpModule && version == "v2.3.0" {
+			return p, fmt.Errorf("actual official net/http integration v2.3.0 is incompatible with core v2.10.1 (ProtectRoundTrip API); explicitly align the HTTP integration to v2.10.1 before applying; business dependencies must be reviewed separately")
+		}
 	}
 	if v1, ok := mods["gopkg.in/DataDog/dd-trace-go.v1"]; ok {
 		_, p.ManualTracer = effectiveModule(v1)
@@ -128,7 +180,7 @@ func selectPlan(mods map[string]module, imports []string) (plan, error) {
 		path, version := effectiveModule(grpc)
 		p.GRPC = path + "@" + version
 	}
-	p.Profile = "shopify-v2.10.1-sarama-" + p.Sarama
+	p.Profile = strings.Join(profiles, "+")
 	return p, nil
 }
 
@@ -151,17 +203,30 @@ func loadModules() (map[string]module, error) {
 }
 
 func applicationImports() ([]string, error) {
-	out, err := exec.Command("go", "list", "-mod=readonly", "-deps", "-f", "{{.ImportPath}}", "./...").Output()
+	target := os.Getenv("PATCH_APP_TARGET")
+	if target == "" {
+		target = "."
+	}
+	if strings.HasPrefix(target, "-") {
+		return nil, fmt.Errorf("PATCH_APP_TARGET must be a Go package target, not a flag")
+	}
+	out, err := exec.Command("go", "list", "-mod=readonly", "-deps", "-f", "{{.ImportPath}}", target).Output()
 	if err != nil {
 		return nil, fmt.Errorf("cannot inspect actual application packages read-only; run in the full project with its build tags and dependencies")
 	}
 	return strings.Fields(string(out)), nil
 }
 
-func checkToolAndSource(want string) error {
-	source, err := os.ReadFile(filepath.Join(want, "sarama.go"))
-	if err != nil || fmt.Sprintf("%x", sha256.Sum256(source)) != patchSHA256 {
-		return fmt.Errorf("patched sarama.go is missing or changed; revalidate the patch")
+func checkToolAndSource(want string, targets ...patchTarget) error {
+	for _, target := range targetsOrDefault(targets) {
+		dir := target.Directory
+		if len(targets) == 0 {
+			dir = want
+		}
+		source, err := os.ReadFile(filepath.Join(dir, target.SourceFile))
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(source)) != target.SHA256 {
+			return fmt.Errorf("patched %s/%s is missing or changed; revalidate the patch", target.Name, target.SourceFile)
+		}
 	}
 	for _, name := range []string{"orchestrion.tool.go", "orchestrion.yml"} {
 		data, err := os.ReadFile(name)
@@ -185,7 +250,11 @@ func checkToolAndSource(want string) error {
 
 // Apply only the integration replacement and explicit tool import. Never edit
 // a business module requirement/replacement. On failure restore touched files.
-func applyPlan(mods map[string]module, want string) error {
+func applyPlan(mods map[string]module, want string, targets ...patchTarget) error {
+	selected := targetsOrDefault(targets)
+	if len(targets) == 0 {
+		selected[0].Directory = want
+	}
 	gomod, err := exec.Command("go", "env", "GOMOD").Output()
 	cwd, cwdErr := os.Getwd()
 	if err != nil || cwdErr != nil || strings.TrimSpace(string(gomod)) != filepath.Join(cwd, "go.mod") {
@@ -195,21 +264,35 @@ func applyPlan(mods map[string]module, want string) error {
 	if err != nil || (strings.TrimSpace(string(workspace)) != "" && strings.TrimSpace(string(workspace)) != "off") {
 		return fmt.Errorf("workspace mode is not supported; use the intended application module with GOWORK=off")
 	}
-	if err := checkToolAndSource(want); err != nil {
+	if err := checkToolAndSource(want, selected...); err != nil {
 		return err
 	}
-	if s := mods[saramaModule]; s.Replace != nil {
-		existing, _ := filepath.Abs(s.Replace.Dir)
-		if existing != want {
-			return fmt.Errorf("a different Shopify integration replacement exists; refusing to overwrite it")
+	for _, target := range selected {
+		if s := mods[target.Module]; s.Replace != nil {
+			existing, _ := filepath.Abs(s.Replace.Dir)
+			if existing != target.Directory {
+				return fmt.Errorf("a different %s integration replacement exists; refusing to overwrite it", target.Name)
+			}
 		}
 	}
 	return applyFiles(mods, want, loadModules, func(dir string) error {
-		return exec.Command("go", "mod", "edit", "-replace="+saramaModule+"="+dir).Run()
-	})
+		args := []string{"mod", "edit"}
+		for _, target := range selected {
+			args = append(args, "-replace="+target.Module+"="+target.Directory)
+		}
+		return exec.Command("go", args...).Run()
+	}, selected...)
 }
 
-func applyFiles(mods map[string]module, want string, resolve func() (map[string]module, error), edit func(string) error) (retErr error) {
+func applyFiles(mods map[string]module, want string, resolve func() (map[string]module, error), edit func(string) error, targets ...patchTarget) (retErr error) {
+	selected := targetsOrDefault(targets)
+	if len(targets) == 0 {
+		selected[0].Directory = want
+	}
+	targetModules := make(map[string]bool)
+	for _, target := range selected {
+		targetModules[target.Module] = true
+	}
 	type snapshot struct {
 		data   []byte
 		mode   os.FileMode
@@ -262,19 +345,23 @@ func applyFiles(mods map[string]module, want string, resolve func() (map[string]
 	if err := edit(want); err != nil {
 		return fmt.Errorf("cannot apply local integration replacement")
 	}
-	if err := enableSaramaToolFile("orchestrion.tool.go"); err != nil {
-		return err
+	for _, target := range selected {
+		if err := enableSaramaToolFile("orchestrion.tool.go", target.Module); err != nil {
+			return err
+		}
 	}
 	after, err := resolve()
 	if err != nil {
 		return err
 	}
-	if s := after[saramaModule]; s.Replace == nil || s.Replace.Dir != want || s.Version != mods[saramaModule].Version {
-		return fmt.Errorf("resolved integration does not use the requested local patch; rolled back")
+	for _, target := range selected {
+		if s := after[target.Module]; s.Replace == nil || s.Replace.Dir != target.Directory || s.Version != mods[target.Module].Version {
+			return fmt.Errorf("resolved %s integration does not use the requested local patch; rolled back", target.Name)
+		}
 	}
 	// A patch must not silently change the selected/effective application graph.
 	for path, before := range mods {
-		if path == saramaModule || before.Version == "" {
+		if targetModules[path] || before.Version == "" {
 			continue
 		}
 		bPath, bVersion := effectiveModule(before)
@@ -303,7 +390,11 @@ func applyFiles(mods map[string]module, want string, resolve func() (map[string]
 // Add only the target integration after pin; do not overwrite the customer's
 // existing integration imports or rules. This also handles pin pruning its
 // aggregate all/v2 import when upstream package-relative replacements fail.
-func enableSaramaToolFile(path string) error {
+func enableSaramaToolFile(path string, modules ...string) error {
+	targetModule := saramaModule
+	if len(modules) > 0 {
+		targetModule = modules[0]
+	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		data = []byte("//go:build tools\n\npackage tools\n\nimport _ \"github.com/DataDog/orchestrion\" // integration\n")
@@ -320,7 +411,7 @@ func enableSaramaToolFile(path string) error {
 		if err != nil {
 			return err
 		}
-		if value == saramaModule {
+		if value == targetModule {
 			if spec.Name == nil || spec.Name.Name != "_" {
 				return fmt.Errorf("target integration must be a blank import")
 			}
@@ -329,7 +420,7 @@ func enableSaramaToolFile(path string) error {
 	}
 	at := fset.Position(file.Name.End()).Offset
 	updated := append([]byte{}, data[:at]...)
-	updated = append(updated, []byte("\n\nimport _ "+strconv.Quote(saramaModule)+" // integration\n")...)
+	updated = append(updated, []byte("\n\nimport _ "+strconv.Quote(targetModule)+" // integration\n")...)
 	updated = append(updated, data[at:]...)
 	updated, err = format.Source(updated)
 	if err != nil {
@@ -338,14 +429,18 @@ func enableSaramaToolFile(path string) error {
 	return os.WriteFile(path, updated, 0o644)
 }
 
-func hasExplicitSaramaIntegration(path string) bool {
+func hasExplicitSaramaIntegration(path string, modules ...string) bool {
+	targetModule := saramaModule
+	if len(modules) > 0 {
+		targetModule = modules[0]
+	}
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 	if err != nil {
 		return false
 	}
 	for _, spec := range file.Imports {
 		value, err := strconv.Unquote(spec.Path.Value)
-		if err == nil && value == saramaModule && spec.Name != nil && spec.Name.Name == "_" {
+		if err == nil && value == targetModule && spec.Name != nil && spec.Name.Name == "_" {
 			return true
 		}
 	}
@@ -362,6 +457,57 @@ func forbidden(path string) bool {
 		strings.HasPrefix(path, "github.com/GuanceCloud/orchestrion/") ||
 		path == "github.com/GuanceCloud/dd-trace-go" ||
 		strings.HasPrefix(path, "github.com/GuanceCloud/dd-trace-go/")
+}
+
+func validateBinary(info *debug.BuildInfo, mods map[string]module, p plan) error {
+	seen := make(map[string]bool)
+	selectedRaw := make(map[string]bool)
+	for _, target := range p.Targets {
+		selectedRaw[target.RawModule] = true
+	}
+	for _, dep := range info.Deps {
+		if forbidden(dep.Path) || (dep.Replace != nil && forbidden(dep.Replace.Path)) {
+			return fmt.Errorf("built application contains fork tracer/tool: %s", dep.Path)
+		}
+		if (dep.Path == rawIBM || dep.Path == rawSarama) && !selectedRaw[dep.Path] {
+			return fmt.Errorf("built application contains unselected Sarama target %s; inspect the actual build entrypoint", dep.Path)
+		}
+		if dep.Path == core {
+			seen[core] = true
+			if dep.Version != "v2.10.1" || (dep.Replace != nil && (dep.Replace.Path != core || dep.Replace.Version != "v2.10.1")) {
+				return fmt.Errorf("built application core differs from validated version")
+			}
+		}
+		for _, target := range p.Targets {
+			if dep.Path == target.Module {
+				seen[target.Module] = true
+				s := mods[target.Module]
+				if dep.Version != target.Version || s.Replace == nil || dep.Replace == nil || dep.Replace.Path != s.Replace.Path || (dep.Replace.Version != "" && dep.Replace.Version != "(devel)") {
+					return fmt.Errorf("built application did not use the local %s patch", target.Name)
+				}
+			}
+			if dep.Path == target.RawModule {
+				seen[target.RawModule] = true
+				raw := module{Path: dep.Path, Version: dep.Version}
+				if dep.Replace != nil {
+					raw.Replace = &module{Path: dep.Replace.Path, Version: dep.Replace.Version}
+				}
+				_, version := effectiveModule(raw)
+				if !validatedTarget(target, raw) || version != target.Sarama {
+					return fmt.Errorf("built application %s differs from selected profile", target.RawModule)
+				}
+			}
+		}
+	}
+	if !seen[core] {
+		return fmt.Errorf("built application lacks the expected official core")
+	}
+	for _, target := range p.Targets {
+		if !seen[target.Module] || !seen[target.RawModule] {
+			return fmt.Errorf("built application lacks the expected %s modules", target.Name)
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -404,77 +550,57 @@ func main() {
 	if err != nil {
 		fail("%v", err)
 	}
-	s := mods[saramaModule]
-	patchDir := os.Getenv("PATCH_SOURCE_DIR")
-	if patchDir == "" {
-		patchDir = "third_party/ddtrace-sarama"
+	for i := range p.Targets {
+		target := &p.Targets[i]
+		env := "PATCH_SOURCE_DIR"
+		if target.Name == "ibm" {
+			env = "PATCH_IBM_SOURCE_DIR"
+		}
+		if dir := os.Getenv(env); dir != "" {
+			target.Directory = dir
+		}
+		target.Directory, err = filepath.Abs(target.Directory)
+		if err != nil {
+			fail("resolve %s patch directory: %v", target.Name, err)
+		}
 	}
-	want, err := filepath.Abs(patchDir)
-	if err != nil {
-		fail("resolve patch directory: %v", err)
-	}
+	want := p.Targets[0].Directory
 	if len(os.Args) == 2 && os.Args[1] == "--apply" {
-		if err := applyPlan(mods, want); err != nil {
+		if err := applyPlan(mods, want, p.Targets...); err != nil {
 			fail("%v", err)
 		}
 		fmt.Printf("PATCH_APPLY_OK profile=%s business-dependencies=preserved run-verifier-and-build-next=true\n", p.Profile)
 		return
 	}
-	if s.Version != "v2.10.1" || s.Replace == nil {
-		fail("Shopify integration must be v2.10.1 with the local patch replacement")
+	for _, target := range p.Targets {
+		s := mods[target.Module]
+		if s.Version != target.Version || s.Replace == nil {
+			fail("%s integration must be %s with the local patch replacement", target.Name, target.Version)
+		}
+		got, err := filepath.Abs(s.Replace.Dir)
+		if err != nil || got != target.Directory {
+			fail("%s replacement does not resolve to its patch source directory", target.Name)
+		}
+		if !hasExplicitSaramaIntegration("orchestrion.tool.go", target.Module) {
+			fail("explicit official %s integration missing; run --apply after pin", target.Name)
+		}
 	}
-	got, err := filepath.Abs(s.Replace.Dir)
-	if err != nil || got != want {
-		fail("Shopify replacement does not resolve to third_party/ddtrace-sarama")
-	}
-	if err := checkToolAndSource(want); err != nil {
+	if err := checkToolAndSource(want, p.Targets...); err != nil {
 		fail("%v", err)
-	}
-	if !hasExplicitSaramaIntegration("orchestrion.tool.go") {
-		fail("explicit official Shopify integration missing; run verify-official.go --enable-sarama after pin")
 	}
 	if len(os.Args) == 2 {
 		info, err := buildinfo.ReadFile(os.Args[1])
 		if err != nil {
 			fail("cannot inspect built application: %v", err)
 		}
-		seenCore, seenSarama, seenRawSarama := false, false, false
-		for _, dep := range info.Deps {
-			if forbidden(dep.Path) || (dep.Replace != nil && forbidden(dep.Replace.Path)) {
-				fail("built application contains fork tracer/tool: %s", dep.Path)
-			}
-			if dep.Path == "github.com/IBM/sarama" || strings.HasPrefix(dep.Path, "github.com/DataDog/dd-trace-go/contrib/IBM/sarama/") {
-				fail("built application contains IBM/Sarama; this patch does not cover that path")
-			}
-			if dep.Path == core {
-				seenCore = true
-				if dep.Version != "v2.10.1" || (dep.Replace != nil && (dep.Replace.Path != core || dep.Replace.Version != "v2.10.1")) {
-					fail("built application core differs from validated version")
-				}
-			}
-			if dep.Path == saramaModule {
-				seenSarama = true
-				if dep.Version != "v2.10.1" || dep.Replace == nil || dep.Replace.Path != s.Replace.Path || (dep.Replace.Version != "" && dep.Replace.Version != "(devel)") {
-					fail("built application did not use the local Shopify patch")
-				}
-			}
-			if dep.Path == "github.com/Shopify/sarama" {
-				seenRawSarama = true
-				rawDep := module{Path: dep.Path, Version: dep.Version}
-				if dep.Replace != nil {
-					rawDep.Replace = &module{Path: dep.Replace.Path, Version: dep.Replace.Version}
-				}
-				_, version := effectiveModule(rawDep)
-				if !validatedSarama(rawDep) || version != p.Sarama {
-					fail("built application Shopify/Sarama differs from selected profile %s", p.Profile)
-				}
-			}
-		}
-		if !seenCore || !seenSarama || !seenRawSarama {
-			fail("built application lacks the expected official core/Shopify modules")
+		if err := validateBinary(info, mods, p); err != nil {
+			fail("%v", err)
 		}
 	}
-	fmt.Printf("PATCH_CHECK_OK profile=%s official-orchestrion=v1.12.1 official-core=v2.10.1 effective-Shopify-sarama=%s local-Shopify-patch=verified no-fork-tracer=true application-compatibility=not-certified\n", p.Profile, p.Sarama)
+	fmt.Printf("PATCH_CHECK_OK profile=%s official-orchestrion=v1.12.1 official-core=v2.10.1 local-Sarama-patches=verified no-fork-tracer=true application-compatibility=not-certified\n", p.Profile)
+	for _, target := range p.Targets {
+		fmt.Printf("PATCH_TARGET_OK target=%s integration=%s@%s effective-sarama=%s@%s\n", target.Name, target.Module, target.Version, target.RawModule, target.Sarama)
+	}
 	if p.GRPC != "" {
 		fmt.Printf("PATCH_SCOPE_NOTE effective-grpc=%s full-business-regression=required\n", p.GRPC)
 	}

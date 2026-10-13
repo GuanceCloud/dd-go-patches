@@ -19,6 +19,7 @@ export PATH="$build_dir/tools:$PATH"
 export DD_TRACE_AGENT_URL="${DD_TRACE_AGENT_URL:-http://127.0.0.1:9529}"
 export DD_TRACE_STARTUP_LOGS=false
 export DD_INSTRUMENTATION_TELEMETRY_ENABLED=false
+export PATCH_APP_TARGET=./cmd/smoke
 
 # Run in a disposable copy so neither profile rewrites the maintained fixture.
 cp -R "$repo_root/tests/official-compat" "$build_dir/fixture"
