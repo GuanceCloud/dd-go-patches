@@ -53,7 +53,7 @@ func validatedTarget(t patchTarget, m module) bool {
 	if t.Name == "shopify" {
 		return validatedSarama(m)
 	}
-	return t.Name == "ibm" && version == "v1.43.2"
+	return t.Name == "ibm" && (version == "v1.43.2" || version == "v1.44.0")
 }
 
 func targetsOrDefault(targets []patchTarget) []patchTarget {

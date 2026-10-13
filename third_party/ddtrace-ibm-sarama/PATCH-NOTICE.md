@@ -16,6 +16,7 @@ This is a local backport, not a DataDog-published release.
 
 This profile does not upgrade/downgrade an application's existing modules.
 Other IBM integration/raw client/core versions require separate validation.
+The exact raw-client matrix is v1.43.2 and v1.44.0, not an inferred interval.
 Use official Orchestrion v1.12.1; official v1 manual tracing is tested at
 v1.74.8. This does not implement isolation between official and fork tracers.
 Applications must continue draining producer successes/errors. No exactly-once

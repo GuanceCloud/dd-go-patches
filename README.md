@@ -8,7 +8,7 @@ tracer SDK.
 ## Unreleased: actual-entrypoint IBM/Sarama support
 
 The working source now contains an independent official-namespace IBM patch:
-IBM integration v2.3.0 + IBM/Sarama v1.43.2 + core v2.10.1. **This is not in
+IBM integration v2.3.0 + IBM/Sarama v1.43.2 or v1.44.0 + core v2.10.1. **This is not in
 the published v0.2.0 archive.** No new download URL/checksum is claimed here.
 Do not remove an IBM guard from the old archive and call the IBM path fixed.
 
@@ -40,10 +40,12 @@ Run from a source checkout:
 ```bash
 go test -race -count=10 ./patches/verify-official.go ./patches/verify-official_test.go
 (cd third_party/ddtrace-ibm-sarama && go test -race -count=10 ./... && go vet ./...)
+bash scripts/test-ibm-matrix.sh
 # Explicitly opt-in: requires the local reproduction broker/container.
 bash scripts/test-ibm-pipeline.sh
 bash scripts/test-ibm-compat.sh
 COMPAT_GRPC_VERSION=v1.57.2 bash scripts/test-ibm-compat.sh
+COMPAT_SARAMA_VERSION=v1.44.0 COMPAT_GRPC_VERSION=v1.57.2 bash scripts/test-ibm-compat.sh
 bash scripts/test-release-package.sh
 ```
 
@@ -59,6 +61,10 @@ A future Dockerfile must also copy `third_party/ddtrace-ibm-sarama` from the
 downloaded archive. Merely changing the version/SHA in the old Shopify-only
 copy command is insufficient. Wait for an actually published new archive and
 its verified checksum; keep the existing application name/runtime/ENV/CMD.
+
+First pin can select IBM/Sarama v1.44.0 from an initial v1.43.2 requirement.
+Both exact versions are covered; --apply preserves the post-pin graph and does
+not force the client back to an earlier version. Review the pin upgrade itself.
 
 ## Published v0.2.0 dependency-preserving adapter (Shopify only)
 

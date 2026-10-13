@@ -3,12 +3,15 @@
 set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/dd-go-patches-ibm-pipeline.XXXXXX")
+version=${1:-v1.43.2}
+case "$version" in v1.43.2|v1.44.0) ;; *) printf 'Unsupported IBM pipeline version\n' >&2; exit 1 ;; esac
 cp -R "$repo_root/tests/ibm-pipeline" "$build_dir/fixture"
 cd "$build_dir/fixture"
 export GOWORK=off REAL_KAFKA_REPRO=1
 export DD_TRACE_AGENT_URL="${DD_TRACE_AGENT_URL:-http://127.0.0.1:9529}"
 export DD_TRACE_STARTUP_LOGS=false DD_INSTRUMENTATION_TELEMETRY_ENABLED=false
 go mod edit -replace="github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2=$repo_root/third_party/ddtrace-ibm-sarama"
+go mod edit -require="github.com/IBM/sarama@$version"
 go mod tidy
 cp go.mod baseline.mod
 cp go.sum baseline.sum
@@ -17,7 +20,7 @@ go mod tidy -modfile=baseline.mod
 go test -mod=readonly -modfile=baseline.mod -c -o "$build_dir/baseline.test" .
 go test -mod=readonly -c -o "$build_dir/patched.test" .
 for scenario in baseline patched unwrapped; do
-  run_id="ibm-${scenario}-$(date +%Y%m%dT%H%M%S)"
+  run_id="ibm-${version//./-}-${scenario}-$(date +%Y%m%dT%H%M%S)"
   binary=$build_dir/patched.test
   test_name=TestRealKafkaConsumerPipeline
   recovery=1

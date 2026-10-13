@@ -116,7 +116,7 @@ func TestSelectPlanActualIBMAndMixedTargets(t *testing.T) {
 			}
 		})
 	}
-	for _, tc := range []struct{ path, version string }{{rawIBM, "v1.44.0"}, {ibmModule, "v2.10.1"}} {
+	for _, tc := range []struct{ path, version string }{{rawIBM, "v1.45.0"}, {ibmModule, "v2.10.1"}} {
 		mods := ibmModules()
 		mods[tc.path] = module{Path: tc.path, Version: tc.version}
 		if _, err := selectPlan(mods, []string{rawIBM}); err == nil {
@@ -124,6 +124,10 @@ func TestSelectPlanActualIBMAndMixedTargets(t *testing.T) {
 		}
 	}
 	mods := ibmModules()
+	mods[rawIBM] = module{Path: rawIBM, Version: "v1.44.0"}
+	if p, err := selectPlan(mods, []string{rawIBM}); err != nil || p.Sarama != "v1.44.0" {
+		t.Fatal("pin-selected IBM v1.44.0 rejected:", p, err)
+	}
 	mods[rawIBM] = module{Path: rawIBM, Version: "v1.44.0", Replace: &module{Path: rawIBM, Version: "v1.43.2"}}
 	if _, err := selectPlan(mods, []string{rawIBM}); err != nil {
 		t.Fatal("effective IBM replacement not recognized:", err)

@@ -7,13 +7,13 @@
   "source_file": "producer.go",
   "source_sha256": "1ef23f6872eb0e582fb8e3b91611603206e6ba18c74123ef69f81c88aaca866a",
   "validated_core": "github.com/DataDog/dd-trace-go/v2@v2.10.1",
-  "validated_sarama_profiles": ["v1.43.2"],
+  "validated_sarama_profiles": ["v1.43.2", "v1.44.0"],
   "validated_orchestrion": "github.com/DataDog/orchestrion@v1.12.1",
   "validated_manual_tracer": "gopkg.in/DataDog/dd-trace-go.v1@v1.74.8",
   "validated_http_if_used": "github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.10.1",
   "grpc_fixture_versions": ["v1.82.1", "v1.57.2 (official replacement)"],
   "application_policy": "Select actual application entrypoint dependencies; patch only selected official integrations; preserve all business requirements/replacements.",
   "application_compatibility": "Private application, public-library versions and other integrations require customer regression testing.",
-  "status": "unreleased-local-backport",
+  "status": "local-backport",
   "retirement_condition": "Independently verify IBM/Sarama fault recovery on an official release before removing this local replacement."
 }

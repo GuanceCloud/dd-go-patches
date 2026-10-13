@@ -17,6 +17,8 @@ export DD_TRACE_STARTUP_LOGS=false DD_INSTRUMENTATION_TELEMETRY_ENABLED=false
 cp -R "$repo_root/tests/ibm-compat" "$build_dir/fixture"
 cd "$build_dir/fixture"
 go mod edit -dropreplace=github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2
+case "${COMPAT_SARAMA_VERSION:-v1.43.2}" in v1.43.2|v1.44.0) ;; *) printf 'Unsupported IBM fixture version\n' >&2; exit 1 ;; esac
+go mod edit -require="github.com/IBM/sarama@${COMPAT_SARAMA_VERSION:-v1.43.2}"
 if [[ -n "${COMPAT_GRPC_VERSION:-}" ]]; then
   case "$COMPAT_GRPC_VERSION" in v1.57.2|v1.82.1) ;; *) printf 'Unsupported gRPC fixture version\n' >&2; exit 1 ;; esac
   go mod edit -replace="google.golang.org/grpc=google.golang.org/grpc@$COMPAT_GRPC_VERSION"
