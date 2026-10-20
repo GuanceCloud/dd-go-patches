@@ -5,7 +5,11 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
-## v0.2.3 candidate: application-scoped and binary verification
+## Published v0.2.3: application-scoped and binary verification
+
+Download [dd-go-patches-v0.2.3.tar.gz](https://github.com/GuanceCloud/dd-go-patches/releases/download/v0.2.3/dd-go-patches-v0.2.3.tar.gz)
+from the [v0.2.3 Release](https://github.com/GuanceCloud/dd-go-patches/releases/tag/v0.2.3)
+and pin SHA256 `bb6fe9119b221840bab2fc489a32477b298e73de5a2e265ed04737af50ea84b7`.
 
 The producer deadlock patches and supported Sarama profiles are unchanged.
 This release corrects the verifier in three places:
