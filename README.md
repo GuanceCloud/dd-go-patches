@@ -5,6 +5,29 @@ and import paths, fix only the required behavior, and explicitly validate the
 dependency combination. This is not an official DataDog release or another
 tracer SDK.
 
+## v0.2.3 candidate: application-scoped and binary verification
+
+The producer deadlock patches and supported Sarama profiles are unchanged.
+This release corrects the verifier in three places:
+
+- A legacy v1 tracer present only in the module graph no longer blocks an
+  automatic-only application. `--inspect` reports `manual_tracer_used`; actual
+  application imports of v1 still require the tested official v1.74.8 shim.
+  `tidy` may legitimately remove an unused v1.74.8 requirement and reveal an
+  old transitive version. Do not keep upgrading an unused module to satisfy a
+  runtime compatibility check.
+- Automatically injected modules can be absent from `go version -m`. When that
+  happens, Linux binary verification checks the compiled wrapper and forwarding
+  goroutine's local source paths rather than declaring the patch missing.
+- Module/package resolution failures preserve the underlying Go diagnostic,
+  with URL authentication details redacted.
+
+Use the same official Orchestrion/core and selected Shopify/IBM profiles as
+v0.2.2. Finalize the module graph before read-only checks, review `pin`/`tidy`
+dependency changes, and build in the same module mode you verified. A successful
+public fixture is not certification of a private application's interfaces or
+Kafka fault recovery. See [v0.2.3 notes](docs/releases/v0.2.3.md).
+
 ## Published v0.2.2: IBM integration v2.10.1 profile
 
 The next release candidate adds a distinct official IBM/Sarama integration
@@ -288,8 +311,33 @@ cause a failure, not a merge.
 The verifier fails closed for module-resolution errors, fork tracer/tool
 dependencies, unsupported effective versions, patch source changes, incorrect
 Orchestrion binaries or missing replacements in the application build info.
-If v1 is present, this release still requires the tested v1.74.8 combination.
+In v0.2.2, mere v1 module presence requires the tested v1.74.8 combination.
+The v0.2.3 verifier scopes that requirement to v1 packages actually used by the
+application target; unused legacy metadata does not establish runtime use.
 It does not prove that every private library or business endpoint is compatible.
+
+The v0.2.3 verifier also handles modules introduced only by automatic
+weaving: `go version -m` can omit these modules even when their functions are
+linked into the executable. When module metadata is missing, the Linux ELF
+fallback requires both `WrapAsyncProducer` and its forwarding goroutine to map
+to the validated local patch source through Go's PC/line table. It also checks
+the official core's compiled source directory if that module's metadata is
+missing. Stripping ELF symbols with `-ldflags='-s -w'` is supported. This fallback
+does not accept trimmed or otherwise unverifiable source paths, and it does not
+turn missing binary evidence into success. The v0.2.2 Release asset still uses
+the original module-metadata-only check; upgrading the archive is required to
+use this verifier correction.
+
+Run `bash scripts/test-ibm-auto-only.sh` to exercise automatic IBM Sarama weaving
+without a runtime import of the tracing integration. This regression needs no
+Kafka broker: it verifies the injected wrapper call, accepts patched normal and
+stripped executables, and rejects unwoven and unpatched executables. It tests
+build evidence, not recovery from the original Kafka backpressure deadlock.
+
+Run `bash scripts/test-unused-v1.sh` for the automatic-only legacy-metadata
+regression. A local common-library fixture requires v1.29.0-alpha.1 without
+importing it: tidy removes the unused v1.74.8 requirement, but the application's
+patched automatic producer still compiles and its binary source is verified.
 
 The `--enable-sarama` preparation step adds only a blank import of the official
 patched Shopify integration to `orchestrion.tool.go`, preserving existing rules

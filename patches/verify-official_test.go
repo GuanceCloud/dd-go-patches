@@ -201,6 +201,37 @@ func TestApplicationImportsMatchesConfiguredBuildEntrypoint(t *testing.T) {
 	}
 }
 
+func TestReadOnlyFailuresPreserveActionableGoDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$PATCH_TEST_GO_STDERR\" >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("PATCH_APP_TARGET", ".")
+	for _, diagnostic := range []string{
+		"go: missing go.sum entry for module providing package example.com/dependency; to add: go mod download example.com/dependency",
+		"go: updates to go.mod needed, disabled by -mod=readonly; to update it: go mod tidy",
+		"go: git ls-remote https://user:sample-password@example.invalid/repo?token=sample-token: authentication failed",
+	} {
+		t.Setenv("PATCH_TEST_GO_STDERR", diagnostic)
+		_, moduleErr := loadModules()
+		_, importErr := applicationImports()
+		for _, err := range []error{moduleErr, importErr} {
+			if err == nil || !strings.Contains(err.Error(), "go list -mod=readonly") {
+				t.Fatalf("failed Go command was hidden: %v", err)
+			}
+			if strings.Contains(diagnostic, "example.invalid") {
+				if !strings.Contains(err.Error(), "authentication failed") || strings.Contains(err.Error(), "sample-password") || strings.Contains(err.Error(), "sample-token") {
+					t.Fatalf("repository diagnostic lost or credentials exposed: %v", err)
+				}
+			} else if !strings.Contains(err.Error(), diagnostic) {
+				t.Fatalf("actionable Go diagnostic lost: %v", err)
+			}
+		}
+	}
+}
+
 func TestValidateBinaryTargets(t *testing.T) {
 	for _, imports := range [][]string{{rawSarama}, {rawIBM}, {rawSarama, rawIBM}} {
 		mods := ibmModules()
@@ -250,6 +281,74 @@ func TestValidateBinaryTargets(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAutomaticallyWovenIntegrationMissingFromModuleMetadata(t *testing.T) {
+	mods := ibmModulesAt("v2.10.1", "v1.44.0")
+	p, err := selectPlan(mods, []string{rawIBM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &p.Targets[0]
+	target.Directory = "/app/third_party/ddtrace-ibm-sarama-v2.10.1"
+	info := &debug.BuildInfo{Deps: []*debug.Module{
+		{Path: core, Version: "v2.10.1"},
+		{Path: rawIBM, Version: "v1.44.0"},
+	}}
+	sources := map[string]string{
+		ibmModule + ".WrapAsyncProducer":       filepath.Join(target.Directory, "producer.go"),
+		ibmModule + ".WrapAsyncProducer.func1": filepath.Join(target.Directory, "producer.go"),
+	}
+	if err := validateBinary(info, mods, p); err == nil {
+		t.Fatal("module metadata alone must remain insufficient")
+	}
+	if err := validateBinarySources(info, mods, p, sources); err != nil {
+		t.Fatalf("automatically linked patched wrapper rejected: %v", err)
+	}
+	for _, source := range []string{
+		"/go/pkg/mod/github.com/!data!dog/dd-trace-go/contrib/!i!b!m/sarama/v2@v2.10.1/producer.go",
+		"github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2@v2.10.1/producer.go",
+		"",
+	} {
+		t.Run(source, func(t *testing.T) {
+			bad := map[string]string{
+				ibmModule + ".WrapAsyncProducer":       source,
+				ibmModule + ".WrapAsyncProducer.func1": source,
+			}
+			if err := validateBinarySources(info, mods, p, bad); err == nil {
+				t.Fatal("unpatched, trimmed, or missing source evidence accepted")
+			}
+		})
+	}
+	delete(sources, ibmModule+".WrapAsyncProducer.func1")
+	if err := validateBinarySources(info, mods, p, sources); err == nil {
+		t.Fatal("wrapper without verified forwarding loop accepted")
+	}
+}
+
+func TestAutomaticallyWovenCoreMissingFromModuleMetadata(t *testing.T) {
+	mods := ibmModulesAt("v2.10.1", "v1.44.0")
+	c := mods[core]
+	c.Dir = "/go/pkg/mod/github.com/!data!dog/dd-trace-go/v2@v2.10.1"
+	mods[core] = c
+	p, err := selectPlan(mods, []string{rawIBM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Targets[0].Directory = "/app/third_party/ddtrace-ibm-sarama-v2.10.1"
+	info := &debug.BuildInfo{Deps: []*debug.Module{{Path: rawIBM, Version: "v1.44.0"}}}
+	sources := map[string]string{
+		core + "/ddtrace/tracer.Start":         filepath.Join(c.Dir, "ddtrace/tracer/tracer.go"),
+		ibmModule + ".WrapAsyncProducer":       filepath.Join(p.Targets[0].Directory, "producer.go"),
+		ibmModule + ".WrapAsyncProducer.func1": filepath.Join(p.Targets[0].Directory, "producer.go"),
+	}
+	if err := validateBinarySources(info, mods, p, sources); err != nil {
+		t.Fatal(err)
+	}
+	sources[core+"/ddtrace/tracer.Start"] = c.Dir + "-wrong/ddtrace/tracer/tracer.go"
+	if err := validateBinarySources(info, mods, p, sources); err == nil {
+		t.Fatal("core from a different directory accepted")
 	}
 }
 
@@ -322,7 +421,7 @@ func TestSelectPlanRejectsUncoveredPathsAndVersions(t *testing.T) {
 		{"unknown Sarama", []string{rawSarama}, func(m map[string]module) { r := m[rawSarama]; r.Replace.Version = "v1.30.0" }},
 		{"different core", []string{rawSarama}, func(m map[string]module) { m[core] = module{Path: core, Version: "v2.11.0"} }},
 		{"different integration", []string{rawSarama}, func(m map[string]module) { m[saramaModule] = module{Path: saramaModule, Version: "v2.3.0"} }},
-		{"old manual v1", []string{rawSarama}, func(m map[string]module) {
+		{"old manual v1", []string{rawSarama, "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"}, func(m map[string]module) {
 			m["gopkg.in/DataDog/dd-trace-go.v1"] = module{Path: "gopkg.in/DataDog/dd-trace-go.v1", Version: "v1.65.1"}
 		}},
 		{"fork module", []string{rawSarama}, func(m map[string]module) {
@@ -345,6 +444,35 @@ func TestSelectPlanRejectsUncoveredPathsAndVersions(t *testing.T) {
 				t.Fatalf("uncovered combination accepted: %+v", p)
 			}
 		})
+	}
+}
+
+func TestManualV1CompatibilityOnlyAppliesToActualApplicationPackages(t *testing.T) {
+	for _, replaced := range []bool{false, true} {
+		mods := supportedModules("v1.38.1")
+		legacy := module{Path: manualTracerModule, Version: "v1.29.0-alpha.1"}
+		if replaced {
+			legacy.Version = "v1.74.8"
+			legacy.Replace = &module{Path: manualTracerModule, Version: "v1.29.0-alpha.1"}
+		}
+		mods[manualTracerModule] = legacy
+		p, err := selectPlan(mods, []string{rawSarama})
+		if err != nil || p.ManualTracerUsed || p.ManualTracer != "v1.29.0-alpha.1" || p.Profile != "shopify-v2.10.1-sarama-v1.38.1" {
+			t.Fatalf("unused legacy v1 metadata blocked an automatic-only application: %+v %v", p, err)
+		}
+		p, err = selectPlan(mods, []string{rawSarama, manualTracerModule + "/contrib/gorilla/mux"})
+		if err == nil || !p.ManualTracerUsed || !strings.Contains(err.Error(), "actually uses manual v1") {
+			t.Fatalf("actually linked legacy v1 was not rejected: %+v %v", p, err)
+		}
+	}
+	mods := supportedModules("v1.38.1")
+	p, err := selectPlan(mods, []string{rawSarama, manualTracerModule + "/ddtrace/tracer"})
+	if err != nil || !p.ManualTracerUsed || p.ManualTracerSelected != "v1.74.8" {
+		t.Fatalf("supported manual v1 rejected: %+v %v", p, err)
+	}
+	delete(mods, manualTracerModule)
+	if _, err := selectPlan(mods, []string{rawSarama, manualTracerModule + "/ddtrace/tracer"}); err == nil {
+		t.Fatal("unresolved active manual v1 module accepted")
 	}
 }
 

@@ -33,11 +33,15 @@ jobs:
       - name: Test effective dependency checks
         run: go test -race ./patches/verify-official.go ./patches/verify-official_test.go
       - name: Check compatibility runner syntax
-        run: bash -n scripts/test-official-compat.sh scripts/test-sarama-matrix.sh scripts/test-ibm-compat.sh scripts/test-ibm-pipeline.sh scripts/test-ibm-matrix.sh scripts/test-release-package.sh
+        run: bash -n scripts/test-official-compat.sh scripts/test-sarama-matrix.sh scripts/test-ibm-compat.sh scripts/test-ibm-pipeline.sh scripts/test-ibm-matrix.sh scripts/test-release-package.sh scripts/test-unused-v1.sh scripts/test-ibm-auto-only.sh
+      - name: Unused manual tracer and automatic-only binary verification
+        run: |
+          bash scripts/test-unused-v1.sh
+          bash scripts/test-ibm-auto-only.sh
       - name: Check release packaging
         run: |
           bash -n scripts/build-release.sh
-          bash scripts/build-release.sh v0.2.2 "$GITHUB_SHA"
-          bash scripts/build-release.sh v0.2.2 "$GITHUB_SHA"
-          cd dist/v0.2.2
+          bash scripts/build-release.sh v0.2.3 "$GITHUB_SHA"
+          bash scripts/build-release.sh v0.2.3 "$GITHUB_SHA"
+          cd dist/v0.2.3
           sha256sum -c SHA256SUMS

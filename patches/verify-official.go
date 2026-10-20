@@ -7,28 +7,33 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"debug/buildinfo"
+	"debug/elf"
+	"debug/gosym"
 	"encoding/json"
 	"fmt"
 	"go/format"
 	"go/parser"
 	"go/token"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
 )
 
 const (
-	core         = "github.com/DataDog/dd-trace-go/v2"
-	saramaModule = "github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2"
-	patchSHA256  = "d7d7be709a97dec05ff67640aac7465520b15f4854788671ba70c24b95a9b9f5"
-	rawSarama    = "github.com/Shopify/sarama"
-	ibmModule    = "github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2"
-	rawIBM       = "github.com/IBM/sarama"
-	httpModule   = "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
+	core               = "github.com/DataDog/dd-trace-go/v2"
+	saramaModule       = "github.com/DataDog/dd-trace-go/contrib/Shopify/sarama/v2"
+	patchSHA256        = "d7d7be709a97dec05ff67640aac7465520b15f4854788671ba70c24b95a9b9f5"
+	rawSarama          = "github.com/Shopify/sarama"
+	ibmModule          = "github.com/DataDog/dd-trace-go/contrib/IBM/sarama/v2"
+	rawIBM             = "github.com/IBM/sarama"
+	httpModule         = "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
+	manualTracerModule = "gopkg.in/DataDog/dd-trace-go.v1"
 )
 
 type patchTarget struct {
@@ -95,14 +100,16 @@ func validatedSarama(m module) bool {
 }
 
 type plan struct {
-	Profile      string        `json:"profile"`
-	Sarama       string        `json:"effective_sarama"`
-	Core         string        `json:"effective_core"`
-	Integration  string        `json:"effective_integration"`
-	ManualTracer string        `json:"effective_manual_tracer,omitempty"`
-	GRPC         string        `json:"effective_grpc,omitempty"`
-	Scope        string        `json:"scope"`
-	Targets      []patchTarget `json:"targets,omitempty"`
+	Profile              string        `json:"profile"`
+	Sarama               string        `json:"effective_sarama"`
+	Core                 string        `json:"effective_core"`
+	Integration          string        `json:"effective_integration"`
+	ManualTracer         string        `json:"effective_manual_tracer,omitempty"`
+	ManualTracerSelected string        `json:"selected_manual_tracer,omitempty"`
+	ManualTracerUsed     bool          `json:"manual_tracer_used"`
+	GRPC                 string        `json:"effective_grpc,omitempty"`
+	Scope                string        `json:"scope"`
+	Targets              []patchTarget `json:"targets,omitempty"`
 }
 
 // An explicit Dockerfile bootstrap may add the tested official integration,
@@ -145,6 +152,9 @@ func selectPlan(mods map[string]module, imports []string) (plan, error) {
 			return p, fmt.Errorf("application uses a legacy v1 Sarama wrapper; this v2 patch does not cover it")
 		}
 		used[path] = true
+		if path == manualTracerModule || strings.HasPrefix(path, manualTracerModule+"/") {
+			p.ManualTracerUsed = true
+		}
 	}
 	profiles := []string{}
 	selectedTargets := []patchTarget{shopifyTarget}
@@ -193,11 +203,17 @@ func selectPlan(mods map[string]module, imports []string) (plan, error) {
 			return p, fmt.Errorf("actual official net/http integration v2.3.0 is incompatible with core v2.10.1 (ProtectRoundTrip API); explicitly align the HTTP integration to v2.10.1 before applying; business dependencies must be reviewed separately")
 		}
 	}
-	if v1, ok := mods["gopkg.in/DataDog/dd-trace-go.v1"]; ok {
+	if v1, ok := mods[manualTracerModule]; ok {
 		_, p.ManualTracer = effectiveModule(v1)
-		if v1.Version != "v1.74.8" || v1.Replace != nil {
-			return p, fmt.Errorf("manual v1 compatibility only tested at unmodified v1.74.8; review pin results explicitly")
+		p.ManualTracerSelected = v1.Version
+		// Old requirements in a dependency's go.mod are not necessarily linked.
+		// tidy may remove an unused explicit v1.74.8 requirement and reveal such
+		// legacy metadata. Require the shim only when application packages use v1.
+		if p.ManualTracerUsed && (v1.Version != "v1.74.8" || v1.Replace != nil) {
+			return p, fmt.Errorf("application actually uses manual v1 instrumentation; compatibility requires unmodified v1.74.8 (selected=%s effective=%s replacement=%t); inspect the active module/workspace before changing dependencies", v1.Version, p.ManualTracer, v1.Replace != nil)
 		}
+	} else if p.ManualTracerUsed {
+		return p, fmt.Errorf("application uses manual v1 instrumentation but its module cannot be resolved")
 	}
 	if grpc, ok := mods["google.golang.org/grpc"]; ok {
 		path, version := effectiveModule(grpc)
@@ -208,9 +224,9 @@ func selectPlan(mods map[string]module, imports []string) (plan, error) {
 }
 
 func loadModules() (map[string]module, error) {
-	out, err := exec.Command("go", "list", "-mod=readonly", "-m", "-json", "all").Output()
+	out, err := goOutput("list", "-mod=readonly", "-m", "-json", "all")
 	if err != nil {
-		return nil, fmt.Errorf("read-only module resolution failed; resolve dependencies in the full project first")
+		return nil, fmt.Errorf("read-only module resolution failed: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(out))
 	mods := make(map[string]module)
@@ -225,6 +241,47 @@ func loadModules() (map[string]module, error) {
 	}
 }
 
+var diagnosticURL = regexp.MustCompile(`(?i)(?:https?|ssh)://[^\s<>"']+`)
+
+func sanitizeGoDiagnostic(detail string) string {
+	return diagnosticURL.ReplaceAllStringFunc(detail, func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "[redacted URL]"
+		}
+		if u.User != nil {
+			u.User = url.User("REDACTED")
+		}
+		if u.RawQuery != "" {
+			u.RawQuery = "REDACTED"
+		}
+		if u.Fragment != "" {
+			u.Fragment = "REDACTED"
+		}
+		return u.String()
+	})
+}
+
+// Preserve the real Go diagnostic: callers must be able to distinguish an
+// incomplete module graph, missing go.sum entries, and repository failures.
+func goOutput(args ...string) ([]byte, error) {
+	cmd := exec.Command("go", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err == nil {
+		return out, nil
+	}
+	detail := strings.TrimSpace(sanitizeGoDiagnostic(stderr.String()))
+	if len(detail) > 8192 {
+		detail = detail[:8192] + "\n[diagnostic truncated]"
+	}
+	if detail == "" {
+		return nil, fmt.Errorf("go %s: %w", strings.Join(args, " "), err)
+	}
+	return nil, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, detail)
+}
+
 func applicationImports() ([]string, error) {
 	target := os.Getenv("PATCH_APP_TARGET")
 	if target == "" {
@@ -233,9 +290,9 @@ func applicationImports() ([]string, error) {
 	if strings.HasPrefix(target, "-") {
 		return nil, fmt.Errorf("PATCH_APP_TARGET must be a Go package target, not a flag")
 	}
-	out, err := exec.Command("go", "list", "-mod=readonly", "-buildvcs=false", "-deps", "-f", "{{.ImportPath}}", target).Output()
+	out, err := goOutput("list", "-mod=readonly", "-buildvcs=false", "-deps", "-f", "{{.ImportPath}}", target)
 	if err != nil {
-		return nil, fmt.Errorf("cannot inspect actual application packages read-only; run in the full project with its build tags and dependencies")
+		return nil, fmt.Errorf("cannot inspect actual application packages read-only: %w", err)
 	}
 	return strings.Fields(string(out)), nil
 }
@@ -483,6 +540,14 @@ func forbidden(path string) bool {
 }
 
 func validateBinary(info *debug.BuildInfo, mods map[string]module, p plan) error {
+	return validateBinarySources(info, mods, p, nil)
+}
+
+// Orchestrion adds imports after cmd/go computes module build information.
+// Consequently an automatically woven integration can be linked but absent
+// from BuildInfo.Deps. Only accept that case with compiled function/source
+// evidence from the executable's Go PC/line table, never from go.mod alone.
+func validateBinarySources(info *debug.BuildInfo, mods map[string]module, p plan, sources map[string]string) error {
 	seen := make(map[string]bool)
 	selectedRaw := make(map[string]bool)
 	for _, target := range p.Targets {
@@ -523,14 +588,80 @@ func validateBinary(info *debug.BuildInfo, mods map[string]module, p plan) error
 		}
 	}
 	if !seen[core] {
-		return fmt.Errorf("built application lacks the expected official core")
+		coreDir := mods[core].Dir
+		if replacement := mods[core].Replace; replacement != nil && replacement.Dir != "" {
+			coreDir = replacement.Dir
+		}
+		for name, source := range sources {
+			if strings.HasPrefix(name, core+"/") && sourceWithin(source, coreDir) {
+				seen[core] = true
+				break
+			}
+		}
+		if !seen[core] {
+			return fmt.Errorf("built application lacks verified official core metadata or compiled source evidence")
+		}
 	}
 	for _, target := range p.Targets {
-		if !seen[target.Module] || !seen[target.RawModule] {
-			return fmt.Errorf("built application lacks the expected %s modules", target.Name)
+		if !seen[target.RawModule] {
+			return fmt.Errorf("built application lacks the expected %s Sarama library", target.Name)
+		}
+		if !seen[target.Module] {
+			want := filepath.Join(target.Directory, target.SourceFile)
+			for _, suffix := range []string{".WrapAsyncProducer", ".WrapAsyncProducer.func1"} {
+				name := target.Module + suffix
+				if !sameSourcePath(sources[name], want) {
+					return fmt.Errorf("%s integration absent from build metadata and patched %s source cannot be verified; module metadata alone cannot determine automatic weaving (retain source paths; -trimpath needs separate provenance)", target.Name, name)
+				}
+			}
 		}
 	}
 	return nil
+}
+
+func sameSourcePath(got, want string) bool {
+	if got == "" || want == "" || !filepath.IsAbs(got) || !filepath.IsAbs(want) {
+		return false
+	}
+	return filepath.Clean(got) == filepath.Clean(want)
+}
+
+func sourceWithin(source, dir string) bool {
+	if source == "" || dir == "" || !filepath.IsAbs(source) || !filepath.IsAbs(dir) {
+		return false
+	}
+	rel, err := filepath.Rel(dir, source)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// .gopclntab is retained in stripped Linux Go executables, unlike ELF symbols.
+func binaryFunctionSources(path string) (map[string]string, error) {
+	f, err := elf.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read Linux ELF executable for automatic-weaving evidence: %w", err)
+	}
+	defer f.Close()
+	text, pcln := f.Section(".text"), f.Section(".gopclntab")
+	if text == nil || pcln == nil {
+		return nil, fmt.Errorf("Go executable has no readable text/PC-line sections")
+	}
+	data, err := pcln.Data()
+	if err != nil {
+		return nil, err
+	}
+	table, err := gosym.NewTable(nil, gosym.NewLineTable(data, text.Addr))
+	if err != nil {
+		return nil, err
+	}
+	sources := make(map[string]string)
+	for _, fn := range table.Funcs {
+		if strings.Contains(fn.Name, "github.com/GuanceCloud/dd-trace-go") || strings.Contains(fn.Name, "github.com/GuanceCloud/orchestrion") {
+			return nil, fmt.Errorf("built application contains fork function %s", fn.Name)
+		}
+		file, _, _ := table.PCToLine(fn.Entry)
+		sources[fn.Name] = file
+	}
+	return sources, nil
 }
 
 func main() {
@@ -616,13 +747,23 @@ func main() {
 		if err != nil {
 			fail("cannot inspect built application: %v", err)
 		}
-		if err := validateBinary(info, mods, p); err != nil {
-			fail("%v", err)
+		if metadataErr := validateBinary(info, mods, p); metadataErr != nil {
+			sources, err := binaryFunctionSources(os.Args[1])
+			if err != nil {
+				fail("%v; automatic-weaving evidence unavailable: %v", metadataErr, err)
+			}
+			if err := validateBinarySources(info, mods, p, sources); err != nil {
+				fail("%v", err)
+			}
+			fmt.Println("PATCH_BINARY_EVIDENCE_OK mode=compiled-function-source automatic-module-metadata=omitted")
 		}
 	}
 	fmt.Printf("PATCH_CHECK_OK profile=%s official-orchestrion=v1.12.1 official-core=v2.10.1 local-Sarama-patches=verified no-fork-tracer=true application-compatibility=not-certified\n", p.Profile)
 	for _, target := range p.Targets {
 		fmt.Printf("PATCH_TARGET_OK target=%s integration=%s@%s effective-sarama=%s@%s\n", target.Name, target.Module, target.Version, target.RawModule, target.Sarama)
+	}
+	if p.ManualTracer != "" && !p.ManualTracerUsed {
+		fmt.Println("PATCH_SCOPE_NOTE manual-v1-module=unused-by-application runtime-version-check=not-applicable")
 	}
 	if p.GRPC != "" {
 		fmt.Printf("PATCH_SCOPE_NOTE effective-grpc=%s full-business-regression=required\n", p.GRPC)
